@@ -1,0 +1,151 @@
+/********************************************/
+/*			Roomba OpenInterfase			*/
+/*					for RX63n @ CS+			*/
+/*					Wrote by conpe_			*/
+/*							2015/12/17		*/
+/********************************************/
+/*
+【概要】
+シリアル通信でルンバを制御します。
+700シリーズで確認。
+
+beginでシリアル関係の設定とモード遷移
+シリアルは115200kbps
+
+
+*/
+
+
+#ifndef ROOMBA_OI_HPP_
+#define ROOMBA_OI_HPP_
+
+
+
+enum ROI_OPCODE{
+	ROI_OPCODE_START		= 128,
+	ROI_OPCODE_BAUD			= 129,
+	ROI_OPCODE_CONTROL		= 130,
+	ROI_OPCODE_SAFE			= 131,
+	ROI_OPCODE_FULL			= 132,
+	ROI_OPCODE_POWER		= 133,
+	ROI_OPCODE_SPOT			= 134,
+	ROI_OPCODE_CLEAN 		= 135,
+	ROI_OPCODE_MAX			= 136,
+	ROI_OPCODE_DRIVE		= 137,
+	ROI_OPCODE_DRIVE_WHEELS	= 145,
+	ROI_OPCODE_MOTORS		= 138,
+	ROI_OPCODE_PWM_MOTORS	= 144,
+	ROI_OPCODE_DRIVE_PWM	= 146,
+	ROI_OPCODE_LEDS			= 139,
+	ROI_OPCODE_SONG			= 140,
+	ROI_OPCODE_PLAY			= 141,
+	ROI_OPCODE_STREAM		= 148,
+	ROI_OPCODE_QUERY_LIST	= 149,
+	ROI_OPCODE_DO_STREAM	= 150,
+	ROI_OPCODE_QUERY		= 142,
+	ROI_OPCODE_FORCE_SEEKING_DOG	= 143,
+	ROI_OPCODE_SCHEDULING_LEDS		= 162,
+	ROI_OPCODE_DIGIT_LEDS_RAW		= 163,
+	ROI_OPCODE_DIDIT_LEDS_ASCII		= 164,
+	ROI_OPCODE_BUTTONS		= 165,
+	ROI_OPCODE_SCHEDULE		= 167,
+	ROI_OPCODE_SET_DAY_TIME	= 168,
+};
+
+enum ROI_SENSPACKET{
+	ROI_SENSPACKET_BUMPS_WHEELDROPS	= 7,
+	ROI_SENSPACKET_WALL		= ,
+	ROI_SENSPACKET_CLIFF_LEFT		= ,
+	ROI_SENSPACKET_CLIFF_FRONT_LEFT		= ,
+	ROI_SENSPACKET_CLIFF_FRONT_RIGHT		= ,
+	ROI_SENSPACKET_CLIFF_RIGHT		= ,
+	ROI_SENSPACKET_VIRTUAL_WALL		= ,
+	ROI_SENSPACKET_OVERCURRENTS		= ,
+	ROI_SENSPACKET_DIRT_DETECT		= 15,
+	ROI_SENSPACKET_IR_OPCODE		= 17,
+	ROI_SENSPACKET_BUTTONS		= ,
+	ROI_SENSPACKET_DISTANCE		= ,
+	ROI_SENSPACKET_ANGLE		= ,
+	ROI_SENSPACKET_CHARGING_STATE		= ,
+	ROI_SENSPACKET_VOLTAGE		= ,
+	ROI_SENSPACKET_CURRENT		= ,
+	ROI_SENSPACKET_TEMPERATURE		= ,
+	ROI_SENSPACKET_BATTERY_CHARGE		= ,
+	ROI_SENSPACKET_BATTERY_CAPACITY		= ,
+	ROI_SENSPACKET_WALL_SIGNAL		= ,
+	ROI_SENSPACKET_CLIFF_LEFT_SIGNAL		= ,
+	ROI_SENSPACKET_CLIFF_FRONT_LEFT_SIGNAL		= ,
+	ROI_SENSPACKET_CLIFF_FRONT_RIGHT_SIGNAL		= ,
+	ROI_SENSPACKET_CLIFF_RIGHT_SIGNAL		= 31,
+	ROI_SENSPACKET_CHARGER_AVAILABLE		= 34,
+	ROI_SENSPACKET_OPEN_INTERFCE_MODE		= ,
+	ROI_SENSPACKET_SONG_NUMBER		= ,
+	ROI_SENSPACKET_SONG_PLAYING		= ,
+	ROI_SENSPACKET_OI_STREAM_NUM_PACKETS		= ,
+	ROI_SENSPACKET_VELOCITY		= ,
+	ROI_SENSPACKET_RADIUS		= ,
+	ROI_SENSPACKET_VOLOCITY_RIGHT		= ,
+	ROI_SENSPACKET_VELOCITY_LEFT		= ,
+	ROI_SENSPACKET_ENCODER_COUNTS_LEFT		= ,
+	ROI_SENSPACKET_ENCODER_COUNTS_RIGHT		= ,
+	ROI_SENSPACKET_LIGHT_BUMPER		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_LEFT		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_FRONT_LEFT		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_CENTER_LEFT		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_CENTER_RIGHT		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_FRONT_RIGHT		= ,
+	ROI_SENSPACKET_LIGHT_BUMP_RIGHT		= ,
+	ROI_SENSPACKET_IR_OPCODE_LEFT		= ,
+	ROI_SENSPACKET_IR_OPCODE_RIGHT		= ,
+	ROI_SENSPACKET_LEFT_MOTOR_CURRENT		= ,
+	ROI_SENSPACKET_RIGHT_MOTOR_CURRENT		= ,
+	ROI_SENSPACKET_MAIN_BRUSH_CURRENT		= ,
+	ROI_SENSPACKET_SIDE_BRUSH_CURRENT		= ,
+	ROI_SENSPACKET_STASIS		= 
+};
+
+enum ROI_MODE{
+	ROI_MODE_PASSIVE,
+	ROI_MODE_SAFE,
+	ROI_MODE_FULL,
+	ROI_MODE_POWERDOWN
+};
+
+class RoombaOi{
+public:
+	RoombaOi(void);
+	~RoombaOi(void);
+
+	// 初期化
+	int8_t begin(Sci_t *SetSci, ROI_MODE Mode);
+
+	// コマンド送信
+	int8_t sendCommand(ROI_OPCODE OpCode);
+	int8_t sendCommand(ROI_OPCODE OpCode, uint8_t *Data);
+	
+	// 送信
+	int8_t setMode(ROI_MODE Mode);
+	int8_t drive(int16_t Spd, int16_t Radius);				//[mm/s], [mm]
+	int8_t driveWheels(int16_t RightSpd, int16_t LeftSpd);	//[mm/s]
+	int8_t drivePwm(int16_t RightPwm, int16_t LeftPwm);	
+
+	// 受信関係
+	int8_t setRcvStream(int8_t NumPacket, ROI_SENSPACKET* SensPackets);	// 定期受信するセンサデータ登録
+	// センサ値取得
+	int8_t getLightBumpSignal(int16_t *LightBumpSignal);	// Left, FrontLeft, CenterLeft, CenterRight, FrontRight, Right
+	int8_t getCliffSignal(int16_t *CliffSignal);	// Left, FrontLeft, FrontRight, Right
+	int8_t getSoc(int8_t *Soc);		// Charge/Capacity[pct]
+
+
+private:
+	Sci_t *Sci;
+	ROI_MODE RoombaMode;
+	int8_t *RcvData;	// 受信データ
+
+	int8_t handleReceive(void);	// チェックサムとか見て受信データに突っ込む
+	int8_t getRcvData(ROI_SENSPACKET SensPacket, int16_t SensData);
+	int8_t getRcvData(ROI_SENSPACKET SensPacket, int8_t SensData);
+
+};
+
+#endif
