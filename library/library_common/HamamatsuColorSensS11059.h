@@ -1,10 +1,10 @@
-/********************************************/
-/*		浜松フォトニクス					*/
-/*			デジタルカラーセンサS11059(I2C)	*/
-/*					for RX63n @ CS+			*/
-/*					Wrote by conpe_			*/
-/*							2015/03/12		*/
-/********************************************/
+/************************************************/
+/*	浜松フォトニクス			*/
+/*		デジタルカラーセンサS11059(I2C)	*/
+/*			for RX63n @ CS+		*/
+/*			Wrote by conpe_		*/
+/*				2015/04/12	*/
+/************************************************/
 
 // wakeup()して、startMeasurement()して、定期的にupdateSens()する。
 // getLuminance()で測定値取得。
@@ -45,10 +45,17 @@ enum mhs11059_comu_content{
 class mhs11059_comus_t;
 
 class hamamatsu_S11059{
-private:
+protected:
+	
+	enum color{
+		red,
+		green,
+		blue
+	};
+	
 	I2c_t *I2Cn;
 	uint8_t I2cAddress;		// I2Cアドレス
-	int16_t SensRed, SensGreen, SensBlue, SensIr;	// 計測したセンサ値
+	uint16_t SensRed, SensGreen, SensBlue, SensIr;	// 計測したセンサ値
 	bool_t fMeasurement;	// 計測中フラグ
 	bool_t fRepeatMeasurement;	// 計測繰り返しフラグ
 	bool_t fI2cErr;			// I2C通信エラー ->送受信やめる
@@ -61,31 +68,33 @@ public:
 	// コンストラクタ
 	hamamatsu_S11059(I2c_t* I2Cn);
 	// デストラクタ
-	~hamamatsu_S11059(void);
+	virtual ~hamamatsu_S11059(void);
 	// 動作開始
-	void begin(void);
+	virtual void begin(void);
 	
 	// 計測結果取得
-	int8_t getLuminance(int16_t* LuminanceRed, int16_t* LuminanceGreen, int16_t* LuminanceBlue);
-	int8_t getLuminance(int16_t* LuminanceRed, int16_t* LuminanceGreen, int16_t* LuminanceBlue, int16_t* LuminanceIr);
-	int8_t getLuminanceRed(int16_t* LuminanceRed);
-	int16_t getLuminanceRed(void){return SensRed;};
-	int8_t getLuminanceGreen(int16_t* LuminanceGreen);
-	int16_t getLuminanceGreen(void){return SensGreen;};
-	int8_t getLuminanceBlue(int16_t* LuminanceBlue);
-	int16_t getLuminanceBlue(void){return SensBlue;};
-	int8_t getLuminanceIr(int16_t* LuminanceIr);
-	int16_t getLuminanceIr(void){return SensIr;};
+	int8_t getLuminance(uint16_t* LuminanceRed, uint16_t* LuminanceGreen, uint16_t* LuminanceBlue);
+	int8_t getLuminance(uint16_t* LuminanceRed, uint16_t* LuminanceGreen, uint16_t* LuminanceBlue, uint16_t* LuminanceIr);
+	int8_t getLuminanceRed(uint16_t* LuminanceRed);
+	uint16_t getLuminanceRed(void){return SensRed;};
+	int8_t getLuminanceGreen(uint16_t* LuminanceGreen);
+	uint16_t getLuminanceGreen(void){return SensGreen;};
+	int8_t getLuminanceBlue(uint16_t* LuminanceBlue);
+	uint16_t getLuminanceBlue(void){return SensBlue;};
+	int8_t getLuminanceIr(uint16_t* LuminanceIr);
+	uint16_t getLuminanceIr(void){return SensIr;};
+	// HSV
+	uint16_t getHsvH(void);	//HSV空間のH(色相)を返す
 	
 	// 各種通信
 	// 1, センサ値読み取り
-	int8_t updateSens(void);
+	virtual int8_t updateSens(void);
 	// 2, モジュールを起こす
-	int8_t wakeup(void);
+	virtual int8_t wakeup(void);
 	// 3, 計測開始
-	int8_t startMeasurement(void);
+	virtual int8_t startMeasurement(void);
 	// 4, 計測停止
-	int8_t stopMeasurement(void);
+	virtual int8_t stopMeasurement(void);
 	
 	
 	// 割り込み用
@@ -95,8 +104,9 @@ public:
 
 class mhs11059_comus_t:public I2c_comu_t{
 public:
-	mhs11059_comus_t(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum)	: I2c_comu_t(DestAddress, TxData, TxNum, RxNum){};	// 送受信
+	mhs11059_comus_t(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum)	: I2c_comu_t(DestAddress, TxData, TxNum, RxNum){DevId = (0x05);};	// 送受信
 	
+	//static uint8_t DevId;	// デバイスID
 	hamamatsu_S11059* MHS11059;
 	mhs11059_comu_content ComuType;
 

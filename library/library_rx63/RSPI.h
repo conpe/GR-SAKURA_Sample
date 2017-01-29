@@ -180,10 +180,8 @@ public:
 	~Spi_t(void);
 	
 	// Configration
-	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0, spi_pin PinSSLn1, spi_pin PinSSLn2, spi_pin PinSSLn3);	// set all SSLn pin to use.
-	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0, spi_pin PinSSLn1, spi_pin PinSSLn2, spi_pin PinSSLn3, uint16_t BuffNum);
-	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0);													// set only SSLn pin to use. already used SSLn pin is sonomama. 
-	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn, uint16_t BuffNum);
+	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0, spi_pin PinSSLn1, spi_pin PinSSLn2, spi_pin PinSSLn3, uint16_t BuffNum = SPI_BUFFER_SIZE_DEFAULT);	// set all SSLn pin to use.
+	int8_t begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn, uint16_t BuffNum = SPI_BUFFER_SIZE_DEFAULT);	// set only SSLn pin to use. already used SSLn pin is sonomama. 
 	void end(void);
 	void setBitOrder(spi_bit_order bitOrder);
 	void setDataMode(spi_mode mode);

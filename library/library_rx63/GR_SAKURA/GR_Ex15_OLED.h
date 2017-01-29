@@ -32,12 +32,9 @@ class gr_ex_oled{
 public:
 	void begin(void);
 	// スイッチ周り処理する関数いらないかなぁ。
-	
-	
-	
+	static void OLED_TxCallback(void);	// 
 };
 
-void OLED_TxCallback(void);
 
 
 

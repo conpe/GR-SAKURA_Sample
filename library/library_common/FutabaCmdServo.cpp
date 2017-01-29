@@ -37,7 +37,8 @@ const uint8_t futaba_cmd_servo::ResisterAdrsLength[24][2] = {
 };
 
 bool_t futaba_cmd_servo::fRcv = false;
-RingBuffer<futaba_cmd_servo_comu_t*>* futaba_cmd_servo::ComusBuff = NULL;
+RingBuffer<futaba_cmd_servo_comu_t*> futaba_cmd_servo::ComusBuff(FTCMDSV_COMUSNUM_DEFAULT);
+
 futaba_cmd_servo_comu_t* futaba_cmd_servo::CurrentComu = NULL;
 bool_t futaba_cmd_servo::fAttaching = false;
 bool_t futaba_cmd_servo::fManaging = false;
@@ -54,39 +55,37 @@ futaba_cmd_servo::futaba_cmd_servo(uint8_t ID, Sci_t* Sci, uint32_t BaudRate){
 	ServoSci = Sci;
 	this->BaudRate = BaudRate;
 	
-	//begin();
+	FailCnt = 0;
 	
 	fRcv = false;
 	fAttaching = false;
 	fManaging = false;
+	
+	LimitCW = FTCMDSV_LIMIT_CW;
+	LimitCCW = FTCMDSV_LIMIT_CCW;
 }
 
-futaba_cmd_servo::futaba_cmd_servo(uint8_t ID, Sci_t* Sci){
-	futaba_cmd_servo(ID, Sci, CMDSV_BAUDRATE_DEFAULT);	// default baudrate
-}
 
 futaba_cmd_servo::~futaba_cmd_servo(void){
-	delete ComusBuff;
+	//delete ComusBuff;
 }
 
 
 
 int8_t futaba_cmd_servo::begin(void){
-	if(ComusBuff==NULL){
-		ComusBuff = new RingBuffer<futaba_cmd_servo_comu_t*>(FTCMDSV_COMUSNUM_DEFAULT);
-		if(NULL==ComusBuff){
-			return -1;
-		}
-	}
-	
 	
 	if(ServoSci->begin(BaudRate, true, true)){	// use tx, rx
 		return -2;
 	}
-	ServoSci->enableTxEndInterrupt();
+	//ServoSci->enableTxEndInterrupt();
 	ServoSci->attachTxEndCallBackFunction(intTxEnd);
 	
 	return 0;
+}
+
+void futaba_cmd_servo::setLimit(int16_t cw, int16_t ccw){
+	LimitCW = cw;
+	LimitCCW = ccw;
 }
 
 
@@ -155,15 +154,25 @@ void futaba_cmd_servo::reset(void){
 /*********************
 目標位置設定
 引数：
-		angle	：目標角度(0.1度単位 90.2度→902 )
+		angle	：目標角度(0.1度単位 例：90.2度→902 )
 **********************/
 void futaba_cmd_servo::setGoalPosition(int16_t angle){
 	uint8_t ang[2];
+	
+	// 最大回転角度を制限
+	if(LimitCW<angle){
+		angle = LimitCW;
+	}else if(LimitCCW>angle){
+		angle = LimitCCW;
+	}
+	
 	
 	ang[0] = angle&0x00FF;
 	ang[1] = (angle>>8)&0xFF;
 	
 	writeMemory(CMDSV_GOALPOSITION, ang);
+	
+	this->GoalPosition = angle;
 	
 }
 
@@ -237,6 +246,7 @@ int8_t futaba_cmd_servo::genShortPacket(uint8_t **TxPacket, uint8_t Flag, uint8_
 //	PORTD.PODR.BYTE = 0x81;
 	
 	*TxPacket = new uint8_t[TxNum];	// ヘッダ+データ+チェックサム
+		if(NULL==TxPacket) __heap_chk_fail();
 	if( NULL == *TxPacket){
 		return -1;
 	}
@@ -261,7 +271,7 @@ int8_t futaba_cmd_servo::genShortPacket(uint8_t **TxPacket, uint8_t Flag, uint8_
 	
 	return TxNum;
 }
-
+// 領域は外で確保する版
 int8_t futaba_cmd_servo::genShortPacket(uint8_t *TxPacket, uint8_t Flag, uint8_t Address, uint8_t Length, uint8_t Cnt, uint8_t *TrData){
 	uint8_t i;
 	uint8_t Sum;
@@ -308,7 +318,6 @@ int8_t futaba_cmd_servo::sendShortPacket(ftcmdsv_comu_content ComuType, uint8_t 
 	uint8_t RxNum;
 	int8_t ack;
 	
-//	PORTD.PODR.BYTE = 0x80;
 	
 	if(fAttaching){
 		return -1;
@@ -330,7 +339,7 @@ int8_t futaba_cmd_servo::sendShortPacket(ftcmdsv_comu_content ComuType, uint8_t 
 	}
 	
 	NewComu = new futaba_cmd_servo_comu_t(this, ComuType, TxData, (uint8_t)TxNum, RxNum);
-	//delete[] TxData;
+		if(NULL==NewComu) __heap_chk_fail();
 	if(NULL == NewComu){
 		// 通信パケット領域確保できなかった
 		fAttaching = false;
@@ -353,7 +362,10 @@ int8_t futaba_cmd_servo::sendShortPacket(ftcmdsv_comu_content ComuType, uint8_t 
 		}
 	}
 	
-	ack = attachComu(NewComu);
+	ack = attachComu(NewComu);	// 送信バッファに登録
+	if(ack){	// 登録失敗したらなかったことに
+		delete NewComu;
+	}
 	
 	fAttaching = false;
 	return ack;
@@ -445,35 +457,43 @@ int8_t futaba_cmd_servo::attachComu(futaba_cmd_servo_comu_t* NewComu){
 	
 	
 	
-	if(!ComusBuff->add(NewComu)){	// バッファに追加
-	//PORTD.PODR.BYTE = 0x82;
+	if(!ComusBuff.add(NewComu)){	// バッファに追加
 		manageComuStart();	//新規追加したので送信してみるよ
+		FailCnt = 0;
 	}else{
-	//PORTD.PODR.BYTE = 0x83;
 		// ComusBuffがいっぱい。
 		// もしかしたら受信待ちで止まってるかも
-		
-		if(fRcv == 1){
-			/*
-	futaba_cmd_servo_comu_t* ComuTmp;
-	
-			ServoSci->enableInterrupts();
+		// カウンタがマックスいったらリセット処理する。
+		FailCnt++;
+		//FailCnt = 0;
+		if(FTCMDSV_FAILCNT_MAX<FailCnt){
+			
+			
 			fRcv = false;
 			endRcv();
 			
 			// バッファ消す
-			uint8_t NumOfBuff = ComusBuff->getNumElements();
-			//for(uint8_t i=0; i<NumOfBuff; i++){
-			for(uint8_t i=0; i<NumOfBuff; i++){
-				ComusBuff->read(&ComuTmp);
-				delete ComuTmp;
-			}
-			delete CurrentComu;
-			CurrentComu = NULL;
+			futaba_cmd_servo_comu_t* ComuTmp;
 			
-			ComusBuff->add(NewComu);
-			manageComuStart();	// 送信してみる
-			*/
+			while(BUFFER_READ_OK == ComusBuff.read(&ComuTmp)){
+				if(NULL!=ComuTmp){
+					delete ComuTmp;
+				}
+			}
+			
+			if(NULL!=CurrentComu){
+				delete CurrentComu;
+				CurrentComu = NULL;
+			}
+			
+			FailCnt = 0;	// 解消したとしよう。
+			
+			if(BUFFER_ADD_OK == ComusBuff.add(NewComu)){
+				manageComuStart();	// 送信してみる
+				return 0;
+			}
+			
+			
 		}
 		return -1;	// 追加失敗
 	}
@@ -501,14 +521,6 @@ void futaba_cmd_servo::waitEndCommand(void){
 /*********************
 // staticな人たち
 **********************/
-// 
-/*
-bool_t futaba_cmd_servo::fRcv = false;
-RingBuffer<futaba_cmd_servo_comu_t*>* futaba_cmd_servo::ComusBuff = NULL;
-futaba_cmd_servo_comu_t* futaba_cmd_servo::CurrentComu = NULL;
-bool_t futaba_cmd_servo::fAttaching = false;
-bool_t futaba_cmd_servo::fManaging = false;
-*/
 /*********************
 通信処理
 次のパケットを送信する
@@ -516,17 +528,17 @@ bool_t futaba_cmd_servo::fManaging = false;
 int8_t futaba_cmd_servo::manageComuStart(void){
 	uint8_t i;
 	futaba_cmd_servo_comu_t* CurrentComuTmp;
-		
+	
+	
 	if(!fRcv){	//受信待ちでなければ
-	//PORTD.PODR.BYTE = 0x84;
+		
+		
 		// 受信待ち中でないのでパケット送信する
-		if(0==ComusBuff->watch(&CurrentComuTmp)){		// 通信オブジェクトを一つ読む
-	//		PORTD.PODR.BYTE = 0x85;
+		if(0==ComusBuff.watch(&CurrentComuTmp)){		// 通信オブジェクトを一つ読む
 			
 			if(ServoSci->getTxBuffFreeSpace() >= CurrentComuTmp->TxNum){		// 送信したい数以上のSCI送信バッファが開いてる
 			
 				if(fManaging){
-	//			PORTD.PODR.BYTE = 0x8B;
 					return -1;
 				}
 				fManaging = true;
@@ -537,48 +549,45 @@ int8_t futaba_cmd_servo::manageComuStart(void){
 				}else{
 					
 				}
-	//					PORTD.PODR.BYTE = fRcv;
 				// SCIにデータ送る
 				if(0<CurrentComuTmp->TxNum){
+					// 送信完了割り込みdisable
+					//ServoSci->disableTxEndInterrupt();
+					ServoSci->detachTxEndCallBackFunction();
 					for(i=0; i<CurrentComuTmp->TxNum; i++){
+						if(i>=CurrentComuTmp->TxNum-1){
+							//ServoSci->enableTxEndInterrupt();	// 最後の一回で有効にする
+							ServoSci->attachTxEndCallBackFunction(intTxEnd);
+						}
 						ServoSci->transmit(CurrentComuTmp->TxData[i]);
-						
-	//					PORTD.PODR.BYTE = CurrentComuTmp->TxData[i];
 					}
 				}
-				// CurrentComu更新
-	//			PORTD.PODR.BYTE = 0x86;
+				//ServoSci->disableTxEndInterrupt();
 				
+				// CurrentComu更新
 				if(NULL!=CurrentComu){
 					delete CurrentComu;				// 前まで通信してたオブジェクトをメモリから削除
 					CurrentComu = NULL;
 				}
-	//			PORTD.PODR.BYTE = 0x87;
 				
-				ComusBuff->read(&CurrentComu);	// 通信オブジェクトを一つ取り出してカレントに
-	//			
-	//			PORTD.PODR.BYTE = 0x88;
+				ComusBuff.read(&CurrentComu);	// 通信オブジェクトを一つ取り出してカレントに
 				
 				fManaging = false;
 				
 				if(!fRcv){
-	//			PORTD.PODR.BYTE = 0x8A;
 					return manageComuStart();	//通信オブジェクトある限り繰り返す。受信時は受信待ちになるので繰り返さない。
 				}
 			}
 		}
 	}else{
-	//PORTD.PODR.BYTE = 0x86;
 	}
 	
-	//PORTD.PODR.BYTE = 0x8F;
 	return 0;
 }
 
 
 // 送信完了
 void futaba_cmd_servo::intTxEnd(void){
-	//PORTD.PODR.BYTE = 0x87;
 	if(NULL != CurrentComu){
 		if(fRcv){
 			CurrentComu->FTCMDSV->startRcv();	// 受信開始
@@ -586,14 +595,17 @@ void futaba_cmd_servo::intTxEnd(void){
 			CurrentComu->FTCMDSV->manageComuStart();
 		}
 	}else{
-	//	PORTD.PODR.BYTE = 0x88;
+		
 	}
 }
 
 // 受信開始
 void futaba_cmd_servo::startRcv(void){
-			
-	//PORTD.PODR.BYTE = 0xA0;
+	
+	// 送信完了割り込みdisable
+	//ServoSci->disableTxEndInterrupt();
+	ServoSci->detachTxEndCallBackFunction();
+	
 	// 受信割り込みon // デフォでon
 	// 受信バッファ消す
 	ServoSci->clearRxBuff();
@@ -614,7 +626,9 @@ void futaba_cmd_servo::endRcv(void){
 // 受信
 void futaba_cmd_servo::intRx(RingBuffer<uint8_t> * RxBuff){
 	if(fRcv){
-		CurrentComu->FTCMDSV->manageComuReceive(RxBuff);	// 受信処理
+		if(NULL!=CurrentComu){
+			CurrentComu->FTCMDSV->manageComuReceive(RxBuff);	// 受信処理
+		}
 	}
 	
 }
@@ -623,7 +637,6 @@ void futaba_cmd_servo::intRx(RingBuffer<uint8_t> * RxBuff){
 void futaba_cmd_servo::manageComuReceive(RingBuffer<uint8_t> * RxBuff){
 	uint8_t RcDataTmp;
 			
-	//PORTD.PODR.BYTE = 0x88;
 	while(!RxBuff->isEmpty()){	// バッファなくなるまで繰り返し
 		if(CurrentComu->ReceivedNum==0){
 			ServoSci->receive(&RcDataTmp);	// 0xFD // ←これでもbuffから読むので結局一緒では
@@ -676,18 +689,16 @@ void futaba_cmd_servo::manageComuReceive(RingBuffer<uint8_t> * RxBuff){
 			}
 			// 次の通信開始
 			endRcv();		// 受信モード終了
-			fRcv = false;	// 受信中フラグ取り下げ
+			fRcv = false;		// 受信中フラグ取り下げ
 			manageComuStart();	//送信データたまってたら送る
 		}
 	}
-	//PORTD.PODR.BYTE = 0x89;
 	
 }
 
 void futaba_cmd_servo::fetchRcvData(futaba_cmd_servo_comu_t* Comu){
 	uint16_t retdata_uint16;
 	
-	//PORTD.PODR.BYTE = 0x89;
 	switch(Comu->ComuType){
 	case CMDSV_PRESENTPOSITION:
 		

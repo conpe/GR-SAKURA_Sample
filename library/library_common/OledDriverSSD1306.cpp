@@ -36,6 +36,7 @@ int8_t OledDriverSSD1306::begin(spi_module SpiModule, spi_pin PinMosi, spi_pin P
 	// DC記憶バッファ
 	if(NULL!=DCBuff) delete DCBuff;
 	DCBuff = new RingBuffer<uint8_t>(OLED_DC_BUFFER_SIZE_DEFAULT);
+		if(NULL==DCBuff) __heap_chk_fail();
 	if(NULL==DCBuff) return -1;
 	
 	_CtrlMode = OLED_SPI;
@@ -171,9 +172,9 @@ void OledDriverSSD1306::initRegister(){
 **********************/
 int8_t OledDriverSSD1306::writeCommand(uint8_t Command){
 	
-	while(DCBuff->isFull());
+	//while(DCBuff->isFull());	// 止まることあるっぽいのでやめ。
 	
-	if(!DCBuff->isFull()){	// 書けたら
+	if(!DCBuff->isFull()){	// 書けるなら
 		DCBuff->add((uint8_t)OLED_WRITE_COMMAND);	// DC覚えておく
 		write(Command);
 		return 0;
@@ -188,9 +189,9 @@ int8_t OledDriverSSD1306::writeCommand(uint8_t Command){
 **********************/
 int8_t OledDriverSSD1306::writeData(uint8_t Data){
 	
-	while(DCBuff->isFull());
+	//while(DCBuff->isFull());	// 止まることあるっぽいのでやめ。
 	
-	if(!DCBuff->isFull()){
+	if(!DCBuff->isFull()){	// 書けるなら
 		DCBuff->add((uint8_t)OLED_WRITE_DATA);
 		write(Data);
 		// カーソル位置更新
@@ -241,7 +242,7 @@ void OledDriverSSD1306::setDC(write_mode WriteMode){
 **********************/
 void OledDriverSSD1306::clearDisplay(void){
 	for(uint16_t kkk=0; kkk<0x400; kkk++){
-		while(writeData(0x00));
+		if(writeData(0x00)) break;
 	}
 }
 
@@ -256,7 +257,7 @@ void OledDriverSSD1306::clearLine(void){
 	setCur(CurRow, 0);		// その行の先頭へ
 	
 	for(uint16_t kkk=0; kkk<OLED_WIDTH; kkk++){
-		while(writeData(0x00));
+		if(writeData(0x00)) break;
 	}
 	setCur(CurRow, CurCol);		// 元の場所へ
 }
@@ -346,6 +347,10 @@ void OledDriverSSD1306::setCurNewLine(uint8_t Row, uint8_t Col){
 	
 int8_t OledDriverSSD1306::writeChar(char ch){
 	uint8_t i;
+	
+	if('\r' == ch){
+		return 0;	
+	}
 	
 	// check clearance
 	if((OLED_WIDTH-_CurCol)<5){	// その行の終わり5列以内だったら次の行にする

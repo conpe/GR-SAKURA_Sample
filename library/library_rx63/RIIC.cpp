@@ -1,20 +1,16 @@
-/********************************************/
-/*		RIICモジュール使用 I2C通信			*/
-/*					for RX63n @ CS+			*/
-/*					Wrote by conpe_			*/
-/*							2015/02/26		*/
-/********************************************/
+/********************************************************/
+/*		RIICモジュール使用 I2C通信(maseter)	*/
+/*					for RX63n @ CS+	*/
+/*					Wrote by conpe_	*/
+/*					2015/02/26	*/
+/********************************************************/
 
 #include "RIIC.h"
-
+extern uint32_t getTime_ms(void);
 // RIIC module 
 // Rx63n is master. 
 
 //絶対beginするんだぞっ
-
-//【更新予定】
-// 送信バッファを持たないようにしたい(通信オブジェクトに持たせる)
-// 通信相手によって違うバッファを使う仕組みほしいな？
 
 
 I2c_t I2C0(I2C_RIIC0);	//
@@ -23,6 +19,8 @@ I2c_t I2C2(I2C_RIIC2);	//
 //I2c_t I2C3(I2C_RIIC3);	//
 
 
+RingBuffer<I2c_comu_t*>* I2c_t::FinComus = NULL;
+uint8_t I2c_comu_general_t::DevId = 0x01;
 
 /****************************
  I2C コンストラクタ
@@ -35,7 +33,11 @@ I2c_t I2C2(I2C_RIIC2);	//
 I2c_t::I2c_t(i2c_module I2cModule)
 {
 	_ModuleNum = I2cModule;		
-	fBegun = false;				// 未begin()
+	fInit = false;				// 未begin()
+
+	
+	this->ComusNumMax = 0;
+	this->TxBuffNumMax = 0;
 	
 	//レジスタ
 	switch(I2cModule){
@@ -58,7 +60,9 @@ I2c_t::I2c_t(i2c_module I2cModule)
 	NextAttachIndex = 0;
 	CurrentComuIndex = 0;
 	
+	Starting = 0;
 	
+	ErrCnt = 0;
 }
 
 /****************************
@@ -89,8 +93,8 @@ I2c_t::~I2c_t(void){
 ****************************/
 int8_t I2c_t::begin(uint16_t Baud_kbps, uint16_t TxBuffNum, uint16_t ComusNum){
 	
-	if(!fBegun){	// 初回のみ
-		fBegun = true;
+	if(!fInit){	// 初回のみ
+		fInit = true;
 		
 		//if(Status!=I2C_IDLE){
 			// 通信止める
@@ -113,43 +117,78 @@ int8_t I2c_t::begin(uint16_t Baud_kbps, uint16_t TxBuffNum, uint16_t ComusNum){
 		// pin mode setting
 		setPinModeI2C();
 		
-		//Buffer
+	}else{
+	}
+	
+	//TxBuffer
+	if(this->TxBuffNumMax < TxBuffNum){	// より多くのバッファを要求
+		this->TxBuffNumMax = TxBuffNum;
+		
+		RingBuffer<uint8_t>* TxBuffOld = TxBuff;
+		
 		TxBuff = new RingBuffer<uint8_t>(TxBuffNum);
+		if(NULL==TxBuff) __heap_chk_fail();
 		if(TxBuff==NULL){
 			return -1;
 		}
-		/*
-		// 受信バッファは通信オブジェクトで持つため、RIICクラスとしては持たない。
-		if(RxBuff) delete RxBuff;
-		RxBuff = new RingBuffer<uint8_t>(BuffNum);
-		if(RxBuff==NULL){
-			return -1;
+		uint8_t tmp;
+		if(NULL	!= TxBuffOld){
+			while(BUFFER_READ_OK==TxBuffOld->read(&tmp)){
+				TxBuff->add(tmp);
+			}
+			delete TxBuffOld;
 		}
-		*/
+	}
+	
+	// 通信内容バッファ
+	if(this->ComusNumMax < ComusNum){	// より多くのバッファを要求
+		this->ComusNumMax = ComusNum;
 		
-		// 通信内容バッファ
-		this->ComusNum = ComusNum;
-		ComusBuff = new RingBuffer<I2c_comu_t*>(this->ComusNum);
+		RingBuffer<I2c_comu_t*>* ComusBuffOld = ComusBuff;
+		
+		ComusBuff = new RingBuffer<I2c_comu_t*>(this->ComusNumMax);
+		if(NULL==ComusBuff) __heap_chk_fail();
 		if(ComusBuff==NULL){
 			return -1;
 		}
-	}else{
-		return 1;	// begin済
+		I2c_comu_t *ComuTmp;
+		if(NULL	!= ComusBuffOld){
+			while(BUFFER_READ_OK==ComusBuffOld->read(&ComuTmp)){
+				ComusBuff->add(ComuTmp);
+			}
+			delete ComusBuffOld;
+		}
+	}
+	
+	// 通信完了バッファ
+	if(NULL == FinComus){
+		FinComus = new RingBuffer<I2c_comu_t*>(I2C_DONE_COMUSNUM);
 	}
 	
 	return 0;
 }
-int8_t I2c_t::begin(uint16_t Baud_kbps, uint16_t TxBuffNum){
-	return begin(Baud_kbps, TxBuffNum, I2C_COMUSNUM_DEFAULT);
-}
-int8_t I2c_t::begin(uint16_t Baud_kbps){
-	return begin(Baud_kbps, I2C_BUFFER_SIZE_DEFAULT, I2C_COMUSNUM_DEFAULT);
-}
-int8_t I2c_t::begin(void){
-	return begin(I2C_BAUDRATE_DEFAULT, I2C_BUFFER_SIZE_DEFAULT, I2C_COMUSNUM_DEFAULT);
-}
 
+/****************************
+ RIICタスク
+概要：
+ 通信が終わったオブジェクトのコールバック関数を実行し、
+ オブジェクトを削除。
+引数：
+ なし
+返値：
+ なし
+****************************/
+void I2c_t::task(void){
+	I2c_comu_t* Comu;
+	while(BUFFER_READ_OK == FinComus->read(&Comu)){
+		if(NULL != Comu){
+			Comu->callBack();
+			delete Comu;
+			Comu = NULL;
+		}
+	}
 
+}
 
 /****************************
  RIICレジスタ設定
@@ -201,8 +240,10 @@ void I2c_t::initRegister(uint16_t Baud_kbps){
 		break;
 	case 400:	// 立ち上がり立ち下がり時間をそれぞれ300nsとする
 		I2Creg->ICMR1.BIT.CKS = I2C_CLOCK_DIV4;
-		BaudCnt = (uint8_t)((float)::getPCLK() / 4.0 * (1.0/(float)Baud_kbps/1000.0 - 0.0000006));
-		// BaudCnt = 23;
+		//BaudCnt = (uint8_t)((float)::getPCLK() / 4.0 * (1.0/(float)Baud_kbps/1000.0 - 0.0000006));
+		//BaudCnt = 23;
+		BaudCnt = 17;	// 実測400kbps
+		//BaudCnt =0x2E;
 		I2Creg->ICBRH.BIT.BRH = BaudCnt/2;
 		I2Creg->ICBRL.BIT.BRL = (BaudCnt+1)/2;
 		break;
@@ -329,57 +370,49 @@ void I2c_t::setPinModeI2C(void){
  送信相手アドレス
  送信データ
  送信データ数
- 受信データ
  受信データ数
  コールバック関数(通信終了時に呼ばれる)
 返値：
  AttachIndex, 
- -1 : Attach数がいっぱい(I2C_COMUS)なら-1,
- -2 : Comusの領域を確保できなければ-2
+ -1 : Attach数がいっぱい(I2C_COMUS)
+ -2 : 通信開始失敗
+ -3 : Comusの領域を確保できなかった
 ****************************/
-
-
 int8_t I2c_t::attach(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum, void (*CallBackFunc)(I2c_comu_t*)){		// 送受信
 	int8_t AttachIndex;
 	I2c_comu_t* Comu;
 	
-	if(!ComusBuff->isFull()){
-		AttachIndex = ComusBuff->getWriteIndex();
-		Comu = new I2c_comu_general_t(AttachIndex, DestAddress, TxData, TxNum, RxNum, CallBackFunc);
-		if(Comu == NULL){	// new失敗
-			return -2;
-		}
-		ComusBuff->add(Comu);	// 通信内容登録
-		
-		if(Status == I2C_IDLE){	// 送信止まってる状態だったら
-			startComu();	// 送信開始
-		}
-	}else{
-		
-		// 詰まってるぽいのでI2Cリセット
-		resetI2C();
-		
-		return -1;
+	
+	Comu = new I2c_comu_general_t(AttachIndex, DestAddress, TxData, TxNum, RxNum, CallBackFunc);
+
+	if(NULL==Comu) __heap_chk_fail();
+	
+	if(Comu == NULL){	// new失敗
+		return -3;
+	}
+	
+	AttachIndex = attach(Comu);
+	if(0 > AttachIndex){
+		// 失敗
+		delete Comu;
 	}
 	
 	return AttachIndex;
 }
-// 送信のみ
-int8_t I2c_t::attach(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, void (*CallBackFunc)(I2c_comu_t* Comu)){						// 送信のみ
-	return attach(DestAddress, TxData, TxNum, 0, CallBackFunc);
-}
-// 送信のみ(コールバック関数なし)
-int8_t I2c_t::attach(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum){		// 送信のみ
-	return attach(DestAddress, TxData, TxNum, 0, NULL);
-}
+
 // 通信クラスでアタッチ
 // -1:バッファ詰まってる(呼び出し元でComuはdeleteしてね)
 // -2:通信開始失敗
+// -3:変なデータ渡された
 int8_t I2c_t::attach(I2c_comu_t* AttachComu){
 	//int8_t AttachIndex;
 	
-	//AttachIndex = ComusBuff->getWriteIndex();
-	if(!ComusBuff->add(AttachComu)){	// 通信内容登録
+	if(NULL == AttachComu){
+		return -3;
+	}
+	
+	AttachComu->AttachIndex = ComusBuff->getWriteIndex();
+	if(BUFFER_ADD_OK == ComusBuff->add(AttachComu)){	// 通信内容登録
 	// 登録成功
 		if(I2C_IDLE == Status){	// 送信止まってる状態だったら
 			if(startComu()){	// 送信開始
@@ -388,14 +421,19 @@ int8_t I2c_t::attach(I2c_comu_t* AttachComu){
 			}
 		}
 	}else{
+		Sci0.print("%08d <warning>I2C jam CurrentComu=0x%02X, AddComu=0x%02X\r\n", getTime_ms(), CurrentComu->DestAddress, AttachComu->DestAddress);
 		
+		// エラーカウント
+		if(ErrCnt<I2C_ERROR_CNT_MAX){
+			ErrCnt++;
+		}
 		// 詰まってるぽいのでI2Cリセット
-		resetI2C();
+		resetI2C(AttachComu);
 		
 		return -1;
 	}
 	
-	return 0;
+	return AttachComu->AttachIndex;
 }
 
 /****************************
@@ -411,26 +449,34 @@ int8_t I2c_t::startComu(void){
 	int8_t ack = 0;
 	I2c_comu_t* CurrentComuTmp;
 	
-	//if((Status == I2C_IDLE)&&(!isBusyBus())){	// 通信中でない
-	if((Status == I2C_IDLE)){	// 通信中でない
-							// isBusyBusって通信終わってちょっとしないと0にならないのが心配
-		if(!ComusBuff->watch(&CurrentComuTmp)){		// バッファから通信情報取得&&バッファよめた
-			// 通信開始
-			if(CurrentComuTmp->RxNum > 0){	// 受信もする
-				ack = transmit_receive(CurrentComuTmp->DestAddress, CurrentComuTmp->TxData, CurrentComuTmp->TxNum, CurrentComuTmp->RxData, CurrentComuTmp->RxNum );	// 送受信
+	if(!Starting){
+		Starting = true;
+		if((Status == I2C_IDLE)){	// 通信中でない
+								// isBusyBusって通信終わってちょっとしないと0にならないのが心配
+			if(BUFFER_READ_OK == ComusBuff->watch(&CurrentComuTmp)){		// バッファから通信情報取得&&バッファよめた
+				// 通信開始
+				if(CurrentComuTmp->RxNum > 0){
+					if(CurrentComuTmp->TxNum > 0){	// 受信もする
+						ack = intstart_transmit_receive(CurrentComuTmp->DestAddress, CurrentComuTmp->TxData, CurrentComuTmp->TxNum, CurrentComuTmp->RxData, CurrentComuTmp->RxNum );	// 送受信
+					}else{	// 受信のみ
+						ack = intstart_receive(CurrentComuTmp->DestAddress, CurrentComuTmp->RxData, CurrentComuTmp->RxNum );	// 受信
+					}
+				}else{	// 送信のみ
+					ack = intstart_transmit(CurrentComuTmp->DestAddress, CurrentComuTmp->TxData, CurrentComuTmp->TxNum);	// 送信
+				}
+				if(!ack){	// 通信開始成功ならCurrentComu更新
+					ComusBuff->read(&CurrentComu);
+				}
 			}else{
-				ack = transmit(CurrentComuTmp->DestAddress, CurrentComuTmp->TxData, CurrentComuTmp->TxNum);	// 送信
-			}
-			if(!ack){	// 通信開始成功ならCurrentComu更新
-				ComusBuff->read(&CurrentComu);
+				ack = -2;	// バッファが空
 			}
 		}else{
-			ack = -2;	// バッファが空
+			ack = -1;	// まだ通信中です
 		}
-	}else{
-		ack = -1;	// まだ通信中です
-	}
 	
+		Starting = false;
+	}
+		
 	return ack;
 }
 	
@@ -440,6 +486,7 @@ int8_t I2c_t::startComu(void){
 
 /****************************
  I2C送信開始(単発モード)
+ 割り込みで通信
 引数
  送信相手アドレス
  送信データ
@@ -448,23 +495,25 @@ int8_t I2c_t::startComu(void){
  0	: 正常
  -1	: ステータスがI2C_IDLEじゃないか、バスがビジー状態
 ****************************/
-int8_t I2c_t::transmit(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum){
-	int8_t ack = 0x00;
+int8_t I2c_t::intstart_transmit(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum){
+	int8_t ack = 0;
+	uint16_t i;
 	//if((Status == I2C_IDLE)&&(!isBusyBus())){
 		// ステータス更新
 		Status = I2C_TRANSMIT;
 		// バッファに入れていく
 		ack |= TxBuff->add(DstAddress<<1);
-		for(int i=0; i<TrDataNum; i++){
+		for(i=0; i<TrDataNum; i++){
 			ack |= TxBuff->add(*TrData++);
 		}
 		
 		// カウントリセット
-		CntTransmit = TrDataNum;
+		CntTransmit = 1+TrDataNum;
 		
-		// スタートビット発行要求
-		reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
-		
+		if(0 == ack){
+			// スタートビット発行要求
+			reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
+		}
 	//}else{
 	//	return -1;
 	//}
@@ -474,6 +523,7 @@ int8_t I2c_t::transmit(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum){
 
 /****************************
  I2C受信開始(単発モード)
+ 割り込みで通信
 引数
  受信相手アドレス
  受信データ
@@ -482,8 +532,8 @@ int8_t I2c_t::transmit(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum){
  0	: 正常
  -1	: ステータスがI2C_IDLEじゃないか、バスがビジー状態
 ****************************/
-int8_t I2c_t::receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
-	int8_t ack;
+int8_t I2c_t::intstart_receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
+	int8_t ack = 0;
 	//if((Status == I2C_IDLE)&&(!isBusyBus())){
 		// ステータス更新
 		Status = I2C_RECEIVE;
@@ -496,8 +546,10 @@ int8_t I2c_t::receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
 		CntReceive = RcDataNum;
 		I2c_t::RcDataNum = RcDataNum;
 		
-		// スタートビット発行要求
-		reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
+		if(0 == ack){
+			// スタートビット発行要求
+			reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
+		}
 	//}else{
 	//	return -1;
 	//}
@@ -506,6 +558,7 @@ int8_t I2c_t::receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
 
 /****************************
  I2C送受信開始(単発モード)
+ 割り込みで通信
 引数
  通信相手アドレス
  送信データ
@@ -516,14 +569,15 @@ int8_t I2c_t::receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
  0	: 正常
  -1	: ステータスがI2C_IDLEじゃないか、バスがビジー状態
 ****************************/
-int8_t I2c_t::transmit_receive(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum, uint8_t* RcData, uint8_t RcDataNum){
-	int8_t ack = 0x00;
+int8_t I2c_t::intstart_transmit_receive(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum, uint8_t* RcData, uint8_t RcDataNum){
+	int8_t ack = 0;
+	uint16_t i;
 	//if((Status == I2C_IDLE)&&(!isBusyBus())){
 		// ステータス更新
 		Status = I2C_TRANSMIT_RECEIVE;
 		// バッファに入れていく
 		ack |= TxBuff->add(DstAddress<<1);				// 相手アドレス
-		for(uint16_t i=0; i<TrDataNum; i++){
+		for(i=0; i<TrDataNum; i++){
 			ack |= TxBuff->add(*TrData++);				// 送信データ
 		}
 		RcvBuffer = RcData;
@@ -531,12 +585,14 @@ int8_t I2c_t::transmit_receive(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDa
 		
 		
 		// カウントリセット
-		CntTransmit = TrDataNum;
+		CntTransmit = 1+TrDataNum;
 		CntReceive = RcDataNum;
 		I2c_t::RcDataNum = RcDataNum;
 		
-		// スタートビット発行要求
-		reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
+		if(0 == ack){
+			// スタートビット発行要求
+			reqStartCondition();	// 実際に発行されるとTDREの割り込みが入り、一連の処理が始まる。
+		}
 	//}else{
 	//	return -1;
 	//}
@@ -546,11 +602,123 @@ int8_t I2c_t::transmit_receive(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDa
 
 
 /****************************
+ I2C送信開始(即通信モード)
+ I2Cの割り込みより優先度の高い割り込みからは実行しないこと
+引数
+ 送信相手アドレス
+ 送信データ
+ 送信データ数
+返値
+ I2C_ERR_OK		: 正常
+ I2C_ERR_TIMEOUT	: 通信が終わらなかった
+****************************/
+int8_t I2c_t::transmit(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum){
+	uint16_t BreakCnt;
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	// 通信開始
+	intstart_transmit(DstAddress, TrData, TrDataNum);
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	return I2C_ERR_OK;
+}
+
+/****************************
+ I2C受信開始(即通信モード)
+ I2Cの割り込みより優先度の高い割り込みからは実行しないこと
+引数
+ 受信相手アドレス
+ 受信データ
+ 受信データ数
+返値
+ I2C_ERR_OK		: 正常
+ I2C_ERR_TIMEOUT	: 通信が終わらなかった
+****************************/
+int8_t I2c_t::receive(uint8_t DstAddress, uint8_t* RcData, uint8_t RcDataNum){
+	uint16_t BreakCnt;
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	// 通信開始
+	intstart_receive(DstAddress, RcData, RcDataNum);
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	return I2C_ERR_OK;
+}
+
+
+/****************************
+ I2C送受信開始(即通信モード)
+ I2Cの割り込みより優先度の高い割り込みからは実行しないこと
+引数
+ 通信相手アドレス
+ 送信データ
+ 送信データ数
+ 受信データ
+ 受信データ数
+返値
+ I2C_ERR_OK		: 正常
+ I2C_ERR_TIMEOUT	: 通信が終わらなかった
+****************************/
+int8_t I2c_t::transmit_receive(uint8_t DstAddress, uint8_t* TrData, uint8_t TrDataNum, uint8_t* RcData, uint8_t RcDataNum){
+	uint16_t BreakCnt;
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	// 通信開始
+	intstart_transmit_receive(DstAddress, TrData, TrDataNum, RcData, RcDataNum);
+	
+	// 通信完了待ち
+	BreakCnt = 0xFFFF;
+	while(I2C_IDLE != Status){	// IDLEでない間待つ
+		if(--BreakCnt == 0x0000){
+			return I2C_ERR_TIMEOUT;
+		}
+	}
+	
+	return I2C_ERR_OK;
+}
+
+
+
+/****************************
  I2Cリセット処理
 ****************************/
-void I2c_t::resetI2C(void){
-	//I2c_comu_t* Comu;
-	//bool IcferMaleTmp;
+void I2c_t::resetI2C(I2c_comu_t* attachcomu){
+	I2c_comu_t* Comu;
 	uint8_t ReClkCnt = 8;	// 追加クロック最大数
 	uint16_t ReClkCntC = 400;	// 追加クロック最大数
 	
@@ -571,13 +739,18 @@ void I2c_t::resetI2C(void){
 		
 		
 		// バッファ開放
-		/*
-		// 登録元で要求だしたままだと思っちゃうので消しちゃだめでしょでしょ
-		while(!ComusBuff->isEmpty()){
-			ComusBuff->read(&Comu);
-			delete Comu;
+		//CurrentComu->Err = true;
+		//FinComus->add(CurrentComu);
+		if(NULL!=CurrentComu){
+		//	delete CurrentComu;
+			CurrentComu = NULL;
 		}
-		*/
+		while(BUFFER_READ_OK == ComusBuff->read(&Comu)){	// 溜まってるやつ全て失敗とする
+		//	Comu->Err = true;	// エラー設定
+		//	if(BUFFER_ADD_OK != FinComus->add(Comu)){
+				delete Comu;	// バッファいっぱいだったら抹消
+		//	}
+		}
 		
 		// アービトレーションロスト検出機能一旦無効化
 		//IcferMaleTmp = I2Creg->ICFER.BIT.MALE;
@@ -594,8 +767,7 @@ void I2c_t::resetI2C(void){
 				}
 			}
 			// 指定回数超えたらやめる
-			ReClkCntC--;	
-			if(!ReClkCntC){
+			if(0 == (--ReClkCntC)){
 				break;
 			}
 		}
@@ -603,11 +775,17 @@ void I2c_t::resetI2C(void){
 		//I2Creg->ICFER.BIT.MALE = IcferMaleTmp;
 		
 		
-		reqStartCondition();
+		//reqStartCondition();
+		Starting = false;
+		Status = I2C_IDLE;
+		
+		if(NULL != attachcomu){
+			ComusBuff->add(attachcomu);
+			startComu();
+		}
+		
 	//}
 };
-
-
 
 
 
@@ -616,8 +794,8 @@ void I2c_t::resetI2C(void){
 指定回数分データを送る。
 
 呼ばれる条件：
- TDREが立った(ICDRT レジスタが空になった)
  TRSビットが立った(スタートコンディションが発行された)
+ TDREが立った(ICDRT レジスタが空になった)
 
 ****************************/
 void I2c_t::isrTx(void){
@@ -626,7 +804,7 @@ void I2c_t::isrTx(void){
 	switch(Status){
 	case I2C_TRANSMIT:
 		if(I2Creg->ICSR2.BIT.NACKF == 0){
-			if(!TxBuff->read(&Data)){	// データあるだけ送る
+			if(BUFFER_READ_OK == TxBuff->read(&Data)){	// データあるだけ送る
 				I2Creg->ICDRT = Data;
 				CntTransmit--;
 			}
@@ -638,16 +816,16 @@ void I2c_t::isrTx(void){
 		
 	case I2C_RECEIVE:
 		// 相手アドレス送る
-		if(!TxBuff->read(&Data)){
+		if(BUFFER_READ_OK == TxBuff->read(&Data)){
 			I2Creg->ICDRT = Data;
 		}
 		
 		break;
 	case I2C_TRANSMIT_RECEIVE:
 		// [送信]データ送る
-		if(CntTransmit>=0){
+		if(CntTransmit>0){
 			if(I2Creg->ICSR2.BIT.NACKF == 0){
-				if(!TxBuff->read(&Data)){	// データあるだけ送る
+				if(BUFFER_READ_OK == TxBuff->read(&Data)){	// データあるだけ送る
 					I2Creg->ICDRT = Data;
 				}
 			}else{
@@ -682,16 +860,16 @@ void I2c_t::isrTxEnd(void){
 	
 	switch(Status){
 	case I2C_TRANSMIT:
-			I2Creg->ICSR2.BIT.STOP = 0;
-			reqStopCondition();
+		I2Creg->ICSR2.BIT.STOP = 0;
+		reqStopCondition();
 		break;
 	case I2C_TRANSMIT_RECEIVE:
 		if(!I2Creg->ICSR2.BIT.NACKF){
-			
 			if(CurrentComu->Err == false){
 				reqRestartCondition();
 				StatusIn = I2C_RESTART;
 			}else{
+	//	Sci0.print("<warning>I2C Stop\r\n");
 				I2Creg->ICSR2.BIT.STOP = 0;
 				reqStopCondition();
 			}
@@ -699,6 +877,7 @@ void I2c_t::isrTxEnd(void){
 		break;
 	}
 }
+
 /****************************
  I2Cストップコンディション完了割り込み
 ****************************/
@@ -709,16 +888,24 @@ void I2c_t::isrStop(void){
 	I2Creg->ICSR2.BIT.NACKF = 0;
 	I2Creg->ICSR2.BIT.STOP = 0;
 	I2Creg->ICFER.BIT.MALE = 1;	// I2C_RESETのときMALEオフにしてるのでここでオン
-	//if(I2C_RESET != Status){
-	//void (I2c_comu_t::*pFunc)() = &I2c_comu_t::callBack;
-	
-	//if(NULL != (CurrentComu->*pFunc())){
 		
 	if(NULL != CurrentComu){
+		if(!CurrentComu->Err){	// 正常終了ならばカウンタリセット
+			ErrCnt = 0;
+		}else{
+			if(ErrCnt<I2C_ERROR_CNT_MAX){
+				ErrCnt++;
+			}
+		}
 		// コールバック関数実行
-		CurrentComu->callBack();
-		// 通信内容消す
-		delete CurrentComu;
+		if(BUFFER_ADD_OK != FinComus->add(CurrentComu)){	// 通信完了オブジェクトバッファに格納
+			ErrCnt++;
+			Sci0.print("I2C ComFinAddBuff Fail\r\n");
+			// 格納失敗したら
+			task();		// 割り込み内だけど受信タスクを実行する(バッファを空ける)
+			FinComus->add(CurrentComu);
+		}
+		
 		CurrentComu = NULL;
 	}
 	TxBuff->clear();
@@ -734,9 +921,9 @@ void I2c_t::isrStop(void){
 ****************************/
 void I2c_t::isrRx(void){
 	
-	if(CurrentComu->Err == false){
+	//if(CurrentComu->Err == false){
 		
-		if(!I2Creg->ICSR2.BIT.NACKF){	// このチェックは初回だけかも！
+		if(!I2Creg->ICSR2.BIT.NACKF && !CurrentComu->Err){	// スレーブあり(このチェックは初回だけかも)
 			if((CntReceive<=2) && !I2Creg->ICMR3.BIT.WAIT){
 				I2Creg->ICMR3.BIT.WAIT = 1;
 			}
@@ -770,10 +957,9 @@ void I2c_t::isrRx(void){
 			I2Creg->ICSR2.BIT.STOP = 0;
 			reqStopCondition();
 			I2Creg->ICDRR;
-			
 			CurrentComu->Err = true;
 		}
-	}
+	//}
 	
 }
 
@@ -786,6 +972,7 @@ void I2c_t::isrNack(void){
 	StatusIn = I2C_NACK;
 	
 	CurrentComu->Err = true;
+//	Sci0.print("<warning>I2C No Slave 0x%X\r\n", CurrentComu->DestAddress);
 	
 	//I2Creg->ICFER.BIT.NACKE = 0;
 	I2Creg->ICSR2.BIT.NACKF = 0;
@@ -800,6 +987,7 @@ void I2c_t::isrNack(void){
 ****************************/
 void I2c_t::isrArbitrationLost(void){
 	
+//	Sci0.print("<warning>I2C ArbitrationLost 0x%X\r\n", CurrentComu->DestAddress);
 	CurrentComu->Err = true;
 	resetI2C();
 	
@@ -877,25 +1065,15 @@ void Excep_RIIC2_EEI2(void){
  通信データクラス コンストラクタ
  送受信
 ****************************/
-I2c_comu_t::I2c_comu_t(void){
+/*I2c_comu_t::I2c_comu_t(void){
 	
-}
+}*/
 
 I2c_comu_t::I2c_comu_t(int8_t AttachIndex, uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum){
 	setI2c(AttachIndex, DestAddress, TxData, TxNum, RxNum);
 }
 I2c_comu_t::I2c_comu_t(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum){
 	setI2c(0, DestAddress, TxData, TxNum, RxNum);
-}
-
-
-/****************************
- 通信データクラス コンストラクタ
- 送信のみ
-  受信バッファはNULL, 受信数は0とする。
-****************************/
-I2c_comu_t::I2c_comu_t(int8_t AttachIndex, uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum){
-	setI2c(AttachIndex, DestAddress, TxData, TxNum, 0);
 }
 
 /****************************
@@ -913,7 +1091,7 @@ I2c_comu_t::~I2c_comu_t(void){
 
 
 void I2c_comu_t::setI2c(int8_t AttachIndex, uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum){
-
+	this->DevId = 0x00;
 	this->AttachIndex = AttachIndex;
 	this->DestAddress = DestAddress;
 	this->TxNum = TxNum;
@@ -923,6 +1101,7 @@ void I2c_comu_t::setI2c(int8_t AttachIndex, uint8_t DestAddress, uint8_t* TxData
 			TxNum = 0x10;
 		}
 		this->TxData = new uint8_t[TxNum];	// newできなかった時の処理を呼び出し元で書くこと
+		if(NULL==this->TxData) __heap_chk_fail();
 	}else{
 		this->TxData = NULL;
 	}
@@ -932,6 +1111,7 @@ void I2c_comu_t::setI2c(int8_t AttachIndex, uint8_t DestAddress, uint8_t* TxData
 			RxNum = 0x10;
 		}
 		this->RxData = new uint8_t[RxNum];
+		if(NULL==this->RxData) __heap_chk_fail();
 	}else{
 		this->RxData = NULL;
 	}

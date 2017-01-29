@@ -6,9 +6,10 @@
 
 //絶対beginするんだぞっ
 
-
-Sci_t Sci5(SCI_SCI5);
+Sci_t Sci0(SCI_SCI0);
+Sci_t Sci1(SCI_SCI1);
 Sci_t Sci2(SCI_SCI2);
+Sci_t Sci5(SCI_SCI5);
 
 // Constructor
 Sci_t::Sci_t(sci_module SciModule)
@@ -24,12 +25,6 @@ Sci_t::Sci_t(sci_module SciModule)
 		break;
 	case SCI_SCI2:
 		SCIreg = &SCI2;
-		break;
-	case SCI_SCI3:
-		SCIreg = &SCI3;
-		break;
-	case SCI_SCI4:
-		SCIreg = &SCI4;
 		break;
 	case SCI_SCI5:
 		SCIreg = &SCI5;
@@ -56,17 +51,6 @@ Sci_t::~Sci_t(void){
 	delete RxBuff;
 }
 
-int8_t Sci_t::begin(uint32_t BaudRate){
-	
-	return begin(BaudRate, true, false);	// default:only tx
-	
-}
-
-int8_t Sci_t::begin(uint32_t BaudRate, bool_t UseTx, bool_t UseRx){
-	return begin(BaudRate, UseTx, UseRx, SCI_TX_BUFFER_SIZE_DEFAULT, SCI_RX_BUFFER_SIZE_DEFAULT);
-}
-
-
 int8_t Sci_t::begin(uint32_t BaudRate, bool_t UseTx, bool_t UseRx, int16_t TxBuffSize, int16_t RxBuffSize){
 	SciConfig.BaudRate = BaudRate;
 	SciConfig.TxEnable = UseTx;
@@ -81,6 +65,7 @@ int8_t Sci_t::begin(uint32_t BaudRate, bool_t UseTx, bool_t UseRx, int16_t TxBuf
 			delete TxBuff;
 		}
 		TxBuff = new RingBuffer<uint8_t>(SciConfig.TxBuffSize); 
+		if(NULL==TxBuff) __heap_chk_fail();
 		if(NULL==TxBuff) return -1;
 	}
 
@@ -89,6 +74,7 @@ int8_t Sci_t::begin(uint32_t BaudRate, bool_t UseTx, bool_t UseRx, int16_t TxBuf
 			delete RxBuff;
 		}
 		RxBuff = new RingBuffer<uint8_t>(SciConfig.RxBuffSize);
+		if(NULL==RxBuff) __heap_chk_fail();
 		if(NULL==RxBuff) return -1;
 	}
 	
@@ -98,6 +84,8 @@ int8_t Sci_t::begin(uint32_t BaudRate, bool_t UseTx, bool_t UseRx, int16_t TxBuf
 	
 	// フラグ初期化
 	fEmptySciTxBuff = true;
+	fTxBuffOvf = false;
+	fRxBuffOvf = false;
 	
 	State = SCI_BEGIN;
 	return 0;
@@ -108,6 +96,12 @@ void Sci_t::initRegister(void){
 	
 	SYSTEM.PRCR.WORD = 0xA503u;
 	switch(SciConfig.SciModule){
+	case SCI_SCI0:
+		MSTP(SCI0) = 0;
+		break;	
+	case SCI_SCI1:
+		MSTP(SCI1) = 0;
+		break;	
 	case SCI_SCI2:
 		MSTP(SCI2) = 0;
 		break;	
@@ -142,37 +136,118 @@ void Sci_t::initRegister(void){
 	
 	// 送受信許可
 	// 割り込み有効, 優先度設定
-	SCIreg->SCR.BYTE = 0x30;	// 送受信許可
+	enableTR();	// 送受信許可
+	//setSciTxData(0xFF);	// 1フレーム分の1を出力すると送信可能状態になる
+	
 	SCIreg->SCR.BIT.TEIE = 0;	// 送信完了割り込みdisable(ラス1送った時にenableする)
 	SCIreg->SCR.BIT.TIE = 1;	// 送信割り込みenable
 	SCIreg->SCR.BIT.RIE = 1;	// 受信割り込みenable
 	
 	enableInterrupts();
 	
-	SCIreg->SSR.BYTE &= 0x80; 	//エラーフラグクリア
+	SCIreg->SSR.BYTE = 0xC0; 	//エラーフラグクリア
 	
 }
 
-void Sci_t::enableInterrupts(void){
-	
+void Sci_t::enableIntTxBuffEmpty(void){
 	switch(SciConfig.SciModule){
-	case SCI_SCI2:	// シリアル通信ははリアルタイム性なくていいかな
+	case SCI_SCI0:	// シリアル通信ははリアルタイム性なくていいかな
+		IEN(SCI0,TXI0) = 1;
+		IPR(SCI0,TXI0) = 7;
+		break;	
+	case SCI_SCI1:
+		IEN(SCI1,TXI1) = 1;
+		IPR(SCI1,TXI1) = 7;
+		break;	
+	case SCI_SCI2:
 		IEN(SCI2,TXI2) = 1;
 		IPR(SCI2,TXI2) = 7;
-		IEN(SCI2,TEI2) = 1;
-		IPR(SCI2,TEI2) = 2;
-		IEN(SCI2,RXI2) = 1;
-		IPR(SCI2,RXI2) = 7;
 		break;	
 	case SCI_SCI5:
 		IEN(SCI5,TXI5) = 1;
 		IPR(SCI5,TXI5) = 0x07;
+		break;
+	}
+}
+
+void Sci_t::disableIntTxBuffEmpty(void){
+	switch(SciConfig.SciModule){
+	case SCI_SCI0:	// シリアル通信ははリアルタイム性なくていいかな
+		IEN(SCI0,TXI0) = 0;
+		break;	
+	case SCI_SCI1:
+		IEN(SCI1,TXI1) = 0;
+		break;	
+	case SCI_SCI2:
+		IEN(SCI2,TXI2) = 0;
+		break;	
+	case SCI_SCI5:
+		IEN(SCI5,TXI5) = 0;
+		break;
+	}
+}
+
+void Sci_t::enableIntTxEnd(void){
+	switch(SciConfig.SciModule){
+	case SCI_SCI0:	// シリアル通信ははリアルタイム性なくていいかな
+		IEN(SCI0,TEI0) = 1;
+		IPR(SCI0,TEI0) = 2;
+		break;	
+	case SCI_SCI1:
+		IEN(SCI1,TEI1) = 1;
+		IPR(SCI1,TEI1) = 2;
+		break;	
+	case SCI_SCI2:
+		IEN(SCI2,TEI2) = 1;
+		IPR(SCI2,TEI2) = 2;
+		break;	
+	case SCI_SCI5:
 		IEN(SCI5,TEI5) = 1;
 		IPR(SCI5,TEI5) = 0x07;
+		break;
+	}
+}
+
+void Sci_t::enableIntRx(void){
+	switch(SciConfig.SciModule){
+	case SCI_SCI0:	// シリアル通信ははリアルタイム性なくていいかな
+		IEN(SCI0,RXI0) = 1;
+		IPR(SCI0,RXI0) = 7;
+		break;	
+	case SCI_SCI1:
+		IEN(SCI1,RXI1) = 1;
+		IPR(SCI1,RXI1) = 7;
+		break;	
+	case SCI_SCI2:
+		IEN(SCI2,RXI2) = 1;
+		IPR(SCI2,RXI2) = 7;
+		break;	
+	case SCI_SCI5:
 		IEN(SCI5,RXI5) = 1;
 		IPR(SCI5,RXI5) = 0x0F;
-		break;	
+		break;
 	}
+}
+
+bool_t Sci_t::isEnableIntRx(void){
+	switch(SciConfig.SciModule){
+	case SCI_SCI0:
+		return IEN(SCI0,RXI0);	
+	case SCI_SCI1:
+		return IEN(SCI1,RXI1);
+	case SCI_SCI2:
+		return IEN(SCI2,RXI2);
+	case SCI_SCI5:
+		return IEN(SCI5,RXI5);
+	}
+	
+	return 0;
+}
+
+void Sci_t::enableInterrupts(void){
+	enableIntTxBuffEmpty();
+	enableIntTxEnd();
+	enableIntRx();
 }
 
 void Sci_t::setPinModeSci(void){
@@ -182,6 +257,30 @@ void Sci_t::setPinModeSci(void){
 	SYSTEM.PRCR.WORD = 0xA503u;
 	
 	switch(SciConfig.SciModule){
+	case SCI_SCI0:
+		if(SciConfig.TxEnable){
+			setPinMode(P20, PIN_OUTPUT);	// TX output
+			MPC.P20PFS.BIT.PSEL = 0x0A;		// TXD2
+			PORT2.PMR.BIT.B0 = 1;			// not GPIO	
+		}
+		if(SciConfig.RxEnable){
+			setPinMode(P21, PIN_INPUT_PULLUP);	// RX input pullup
+			MPC.P21PFS.BIT.PSEL = 0x0A;		// RXD2 
+			PORT2.PMR.BIT.B1 = 1;			// not GPIO
+		}
+		break;	
+	case SCI_SCI1:
+		if(SciConfig.TxEnable){
+			setPinMode(P26, PIN_OUTPUT);	// TX output
+			MPC.P26PFS.BIT.PSEL = 0x0A;		// TXD1
+			PORT2.PMR.BIT.B6 = 1;			// not GPIO	
+		}
+		if(SciConfig.RxEnable){
+			setPinMode(P30, PIN_INPUT_PULLUP);	// RX input pullup
+			MPC.P30PFS.BIT.PSEL = 0x0A;		// RXD2 
+			PORT3.PMR.BIT.B0 = 1;			// not GPIO
+		}
+		break;	
 	case SCI_SCI2:
 		if(SciConfig.TxEnable){
 			setPinMode(P50, PIN_OUTPUT);	// TX output
@@ -189,9 +288,9 @@ void Sci_t::setPinModeSci(void){
 			PORT5.PMR.BIT.B0 = 1;			// not GPIO	
 		}
 		if(SciConfig.RxEnable){
-			setPinMode(P52, PIN_INPUT);		// RX input
+			setPinMode(P52, PIN_INPUT_PULLUP);	// RX input pullup
 			MPC.P52PFS.BIT.PSEL = 0x0A;		// RXD2 
-			PORT5.PMR.BIT.B2 = 1;			// not GPIO	
+			PORT5.PMR.BIT.B2 = 1;			// not GPIO
 		}
 		break;	
 	case SCI_SCI5:
@@ -201,7 +300,7 @@ void Sci_t::setPinModeSci(void){
 			PORTC.PMR.BIT.B3 = 1;			// not GPIO	
 		}
 		if(SciConfig.RxEnable){
-			setPinMode(PC2, PIN_INPUT);		// RX input
+			setPinMode(PC2, PIN_INPUT_PULLUP);	// RX input pullup
 			MPC.PC2PFS.BIT.PSEL = 0x0A;		// RXD5 
 			PORTC.PMR.BIT.B2 = 1;			// not GPIO	
 		}
@@ -211,33 +310,49 @@ void Sci_t::setPinModeSci(void){
 }
 
 
-int8_t Sci_t::transmit(uint8_t TrData){
-	int8_t ack;
+Sci_err Sci_t::transmit(uint8_t TrData){
+	int8_t ack = SCI_OK;
 	
-	//if(this==&Sci5)	PORTD.PODR.BYTE = 0x44;
 	ack = TxBuff->add(TrData);
-	if(!ack){
-	//	SCIreg->SCR.BIT.TIE = 1;	// 送信バッファ空き割り込みenable <- 常にenable
-	//	SCIreg->SCR.BIT.TEIE = 0;	// 送信完了割り込みdisable
+	if(BUFFER_NG == ack){
+		fTxBuffOvf = true;
+		return SCI_TX_ERR;
+	}else{
+		//if(isIdle()){	// TDRレジスタ開いてる もしくは モジュールがアイドル状態なら送る(何かの拍子にフラグ更新されなかった疑惑)
+		if(fTdrEmpty){
+			isrTx();	// Transmit one time
+		}
+		return SCI_OK;
 	}
 	
-	//if((fEmptySciTxBuff==true)||isIdle()){	//送信リングバッファが空 もしくは モジュールがアイドル状態なら送る
-	if(needTxStartSequence()||isIdle()){	// TDRレジスタ開いてる もしくは モジュールがアイドル状態なら送る(何かの拍子にフラグ更新されなかった疑惑)
-		isrTx();	// Transmit one time
-	}
-	//if(this==&Sci5)	PORTD.PODR.BYTE = 0x4F;
-		
-	State = SCI_TX_START;
-	return ack;
+	return SCI_OK;
 }
 
-int8_t Sci_t::receive(uint8_t *RcData){
-	return RxBuff->read(RcData);
+Sci_err Sci_t::receive(uint8_t *RcData){
+	// フレーミングエラー
+	if(isFramingErr()){
+		clearFramingErr();
+		RxBuff->clear();
+		return SCI_RX_ERR;
+	}
+	// オーバーランエラー
+	if(isOverrun()){
+		clearOverrun();
+		RxBuff->clear();
+		return SCI_RX_ERR;
+	}
+	
+	if(BUFFER_READ_OK == RxBuff->read(RcData)){
+		return SCI_OK;
+	}
+	return SCI_NODATA;
 }
 
 uint8_t Sci_t::receive(void){
 	uint8_t RcData = 0xff;
-	RxBuff->read(&RcData);
+	
+	receive(&RcData);
+	
 	return RcData;
 }
 
@@ -246,33 +361,35 @@ void Sci_t::clearRxBuff(void){
 }
 
 
-int8_t Sci_t::print(char ch){
+Sci_err Sci_t::print(char ch){
 	return transmit(ch);
 }
 
 
-int8_t Sci_t::print(int num){
+Sci_err Sci_t::print(int num){
+	Sci_err ack = SCI_OK;
 	int16_t Cnt;
 	int16_t Num;
 	
 	char pStrCnst[SCI_MAX_STRING];
 	char *pStr = pStrCnst;
 	//char *pStr = new char[SCI_MAX_STRING];
-	if(NULL==pStr){		// 確保できなければそのまま出しちゃう
-		return -1;	
+	if(NULL==pStr){		// 確保できなかった
+		return SCI_MEM_ERR;
 	}
 	
 	Num = sprintf(pStr, "%d", num);
 	
 	for(Cnt=0; Cnt<Num; Cnt++){
-		transmit(*pStr++);
+		ack = transmit(*pStr++);
 	}
 	
 	//delete[] pStr;
-	return 0;
+	return ack;
 }
 	
-int8_t Sci_t::print(const char *control, ...){
+Sci_err Sci_t::print(const char *control, ...){
+	Sci_err ack = SCI_OK;
 	int16_t Cnt;
 	int16_t Num;
 	
@@ -290,15 +407,16 @@ int8_t Sci_t::print(const char *control, ...){
 		va_end(arg);
 	}
 	for(Cnt=0; Cnt<Num; Cnt++){
-		transmit(*pStr++);
+		ack = transmit(*pStr++);
 	}
 	
 	//delete[] pStr;
 	
-	return 0;
+	return ack;
 }
 
-int8_t Sci_t::println(const char *control, ...){
+Sci_err Sci_t::println(const char *control, ...){
+	Sci_err ack = SCI_OK;
 	int16_t Cnt;
 	int16_t Num;
 	
@@ -317,12 +435,13 @@ int8_t Sci_t::println(const char *control, ...){
 	}
 	
 	for(Cnt=0; Cnt<Num; Cnt++){
-		transmit(*pStr++);
+		ack = transmit(*pStr++);
 	}
+	transmit('\r');
 	transmit('\n');
 	
 	//delete[] pStr;
-	return 0;
+	return ack;
 }
 
 
@@ -335,59 +454,32 @@ int8_t Sci_t::println(const char *control, ...){
 **********************/
 void Sci_t::isrTx(void){
 	uint8_t Data;
+	
+	State = SCI_TX_TXI;
+		fTdrEmpty = true;	// この関数に入ったってことはTDRはempty
+	
 	if(!fIsr){	// 処理中に割り込みとか来ても困るので！
 		fIsr = true;
-	//	if(this==&Sci5) PORTD.PODR.BYTE = 0x4a;
 		
-		if(!TxBuff->read(&Data)){	//バッファ読む。ちゃんと読めたらsetする
-		
-	//		if(this==&Sci5)	PORTD.PODR.BYTE = 0x40;
-		
-			
-			if(fTxEndInterruptEnable && (TxBuff->isEmpty())){	// 送信完了割り込み有りで、ラス1送るので送信割り込みoff
-				SCIreg->SCR.BIT.TIE = 0;
-			}else{
-				SCIreg->SCR.BIT.TIE = 1;
-			}
-				
+		if(!TxBuff->read(&Data)){	//バッファ読む。バッファあったらsetする
 			// データ送信
-			fTdrEmpty = false;		// 送信レジスタ空いてるフラグクリア
-			
+			fTdrEmpty = false;		// 送信レジスタ空いてるフラグクリア	// これtrueに出来る？->次にTEI入ったときにtrue
 			setSciTxData(Data);		// Transmit data
-	//		if(this==&Sci5) PORTD.PODR.BYTE = Data;
-			// 割り込み設定
-			// 最後の送信だったら、送信完了割り込みを使う
-			if(fTxEndInterruptEnable && (TxBuff->isEmpty())){	// 送信完了割り込み, ラス1送ったとこ
-				SCIreg->SCR.BIT.TIE = 0;	// 送信バッファエンプティ割り込み停止
-				//SCIreg->SSR.BIT.TEND = 0;	// 初め0になってるので、TEIEを1にした瞬間に割り込み入っちゃうのを阻止する。
-				//							// ハードウェアマニュアル"35.11 割り込み要因"参照
-											// -> read専用だったので、割り込み先でSSR.TENDを確認するように。
-											// -> また、データ送信して(ここでTENDが0になるはず)から割り込み設定をすることでも回避
-											
+			
+			State = SCI_TX_START;
+			
+			if(TxBuff->isEmpty()){	// ラス1送ったとこ
 				SCIreg->SCR.BIT.TEIE = 1;	// 送信完了割り込みenable
-	//		if(this==&Sci5) PORTD.PODR.BYTE = 0xE0;
 			}else{
-				SCIreg->SCR.BIT.TIE = 1;
-				SCIreg->SCR.BIT.TEIE = 0;
-	//		if(this==&Sci5) PORTD.PODR.BYTE = 0xE1;
+				SCIreg->SCR.BIT.TEIE = 0;	// 送信完了割り込みdisable	
 			}
-			
-			
-		}else{	// もうバッファ無し
-	//		if(this==&Sci5) PORTD.PODR.BYTE = 0x41;
-			
-			fTdrEmpty = true;	// 送信レジスタ空いてるフラグセット
 		}
-		
 		
 		fIsr = false;
 	}else{
-	//	if(this==&Sci5) PORTD.PODR.BYTE = 0x4b;
+		
 	}
 	
-	//if(this==&Sci5) PORTD.PODR.BYTE = 0xFF;
-	
-	State = SCI_TX_TXI;
 }
 
 /*********************
@@ -395,25 +487,22 @@ void Sci_t::isrTx(void){
 **********************/
 void Sci_t::isrTxEnd(void){
 	
-	//if(this==&Sci5) PORTD.PODR.BYTE = 0x42;
-	
-	if(SCIreg->SSR.BIT.TEND){
-		if(TxBuff->isEmpty()){	// この処理までにバッファ入ってきてるか判定(始めの1つめの送信後はすぐ入ってきてる可能性あり)
-			// バッファ入ってないです。
-			fTdrEmpty = true;			// 送信レジスタ空いてるフラグクリア
+	//	if(TxBuff->isEmpty()){	// この処理までにバッファ入ってきてるか判定(始めの1つめの送信後はすぐ入ってきてる可能性あり)
+			// バッファにもう無いので送信終了
+			
+			fTdrEmpty = true;		// 送信レジスタ空いてるフラグセット
 			SCIreg->SCR.BIT.TEIE = 0;	// 送信完了割り込み無効
 			
-			if(NULL!=TxEndCallBackFunc){		// コールバック関数がattachされていたら
+			if(NULL!=TxEndCallBackFunc){	// コールバック関数がattachされていたら
 				TxEndCallBackFunc();	// コールバック関数を実行
 			}
-		}else{
-			// すぐにバッファたまってた！
-			SCIreg->SCR.BIT.TEIE = 0;	// 送信完了割り込み無効
-			isrTx();				
-		}
-	}
+			
+	//	}else{
+			// すぐにバッファたまってた！(複数送信の一発目はここの処理に入る)
+	//		isrTx();
+	//	}
 	
-	//if(this==&Sci5) PORTD.PODR.BYTE = 0xFF;
+	
 	State = SCI_TX_TEI;
 }
 
@@ -422,16 +511,29 @@ void Sci_t::isrTxEnd(void){
  受信完了割り込み処理
 **********************/
 void Sci_t::isrRx(void){
-	//if(this==&Sci5) PORTD.PODR.BYTE = 0x43;
 	
-	RxBuff->add(getSciRxData());	// バッファに貯めこむ
-		
-	if(NULL!=RxCallBackFunc){		// コールバック関数がattachされていたら
+	State = SCI_RX_RXI;
+	
+	
+	fRxBuffOvf = RxBuff->add(getSciRxData());	// バッファに貯めこむ
+	
+	// フレーミングエラー
+	if(isFramingErr()){
+		clearFramingErr();
+		RxBuff->clear();
+		return;
+	}
+	// オーバーランエラー
+	if(isOverrun()){
+		clearOverrun();
+		RxBuff->clear();
+		return;
+	}
+	
+	if(NULL!=RxCallBackFunc){	// コールバック関数がattachされていたら
 		RxCallBackFunc(RxBuff);	// コールバック関数を実行
 	}
 	
-	//if(this==&Sci5) PORTD.PODR.BYTE = 0xFF;
-	State = SCI_RX_RXI;
 }
 
 
@@ -441,45 +543,59 @@ void Sci_t::isrRx(void){
 
 
 
-// interrupt
 #pragma section IntPRG
-// tx
+// interrupt
+/* SCI0 */
+#ifndef TARGET_BOARD	// GR-SAKURA用プロジェクトの時は使えない
+#pragma interrupt (Excep_SCI0_TXI0(vect=VECT(SCI0,TXI0), enable))
+void Excep_SCI0_TXI0(void){
+	setpsw_i();	//多重割り込み許可
+	Sci0.isrTx();
+}
+#pragma interrupt (Excep_SCI0_TEI0(vect=VECT(SCI0,TEI0), enable))
+void Excep_SCI0_TEI0(void){
+	setpsw_i();	//多重割り込み許可
+	Sci0.isrTxEnd();
+}
+
+#pragma interrupt (Excep_SCI0_RXI0(vect=VECT(SCI0,RXI0), enable))
+void Excep_SCI0_RXI0(void){
+	setpsw_i();	//多重割り込み許可
+	Sci0.isrRx();
+}
+#endif
+
+
+/* SCI1 */
+#pragma interrupt (Excep_SCI1_TXI1(vect=VECT(SCI1,TXI1), enable))
+void Excep_SCI1_TXI1(void){
+	setpsw_i();	//多重割り込み許可
+	Sci1.isrTx();
+	}
+#pragma interrupt (Excep_SCI1_TEI1(vect=VECT(SCI1,TEI1), enable))
+void Excep_SCI1_TEI1(void){
+	setpsw_i();	//多重割り込み許可
+	Sci1.isrTxEnd();
+}
+#pragma interrupt (Excep_SCI1_RXI1(vect=VECT(SCI1,RXI1), enable))
+void Excep_SCI1_RXI1(void){
+	setpsw_i();	//多重割り込み許可
+	Sci1.isrRx();
+}
+
+
+/* SCI2 */
 #ifndef TARGET_BOARD	// GR-SAKURA用プロジェクトの時は使えない
 #pragma interrupt (Excep_SCI2_TXI2(vect=VECT(SCI2,TXI2), enable))
 void Excep_SCI2_TXI2(void){
 	setpsw_i();	//多重割り込み許可
 	Sci2.isrTx();
 }
-#endif
-
-#pragma interrupt (Excep_SCI5_TXI5(vect=VECT(SCI5,TXI5), enable))
-void Excep_SCI5_TXI5(void)
-{
-	setpsw_i();	//多重割り込み許可
-	// PORTD.PODR.BYTE = 0x4c;
-	Sci5.isrTx();
-	// PORTD.PODR.BYTE = 0x4d;
-}
-
-// 送信完了割り込み
-#ifndef TARGET_BOARD	// GR-SAKURA用プロジェクトの時は使えない
 #pragma interrupt (Excep_SCI2_TEI2(vect=VECT(SCI2,TEI2), enable))
-void Excep_SCI2_TEI2(void)
-{
+void Excep_SCI2_TEI2(void){
 	setpsw_i();	//多重割り込み許可
 	Sci2.isrTxEnd();
 }
-#endif
-
-#pragma interrupt (Excep_SCI5_TEI5(vect=VECT(SCI5,TEI5), enable))
-void Excep_SCI5_TEI5(void)
-{
-	setpsw_i();	//多重割り込み許可
-	Sci5.isrTxEnd();
-}
-
-//rx
-#ifndef TARGET_BOARD	//
 #pragma interrupt (Excep_SCI2_RXI2(vect=VECT(SCI2,RXI2), enable))
 void Excep_SCI2_RXI2(void){
 	setpsw_i();	//多重割り込み許可
@@ -487,12 +603,21 @@ void Excep_SCI2_RXI2(void){
 }
 #endif
 
+/* SCI5 */
+#pragma interrupt (Excep_SCI5_TXI5(vect=VECT(SCI5,TXI5), enable))
+void Excep_SCI5_TXI5(void){
+	setpsw_i();	//多重割り込み許可
+	Sci5.isrTx();
+	}
+#pragma interrupt (Excep_SCI5_TEI5(vect=VECT(SCI5,TEI5), enable))
+void Excep_SCI5_TEI5(void){
+	setpsw_i();	//多重割り込み許可
+	Sci5.isrTxEnd();
+}
 #pragma interrupt (Excep_SCI5_RXI5(vect=VECT(SCI5,RXI5), enable))
 void Excep_SCI5_RXI5(void){
 	setpsw_i();	//多重割り込み許可
-	// PORTD.PODR.BYTE = 0x4e;
 	Sci5.isrRx();
-	// PORTD.PODR.BYTE = 0x4f;
 }
 
 // TXI0, RXI0, RXI2はどっかで使われる(割り込みベクターの設定がある)っぽいので要確認

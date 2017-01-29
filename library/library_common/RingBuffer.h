@@ -28,11 +28,16 @@
 
 #define BUFFER_SIZE_DEFAULT  255U
 
+#define BUFFER_ADD_OK	0
+#define BUFFER_READ_OK	0
+#define BUFFER_NG	-1
+
+
 template <typename DATATYPE> class RingBuffer
 {
 private : 
 	DATATYPE *Buffer;	// buffer
-	uint16_t BufferSize;
+	uint16_t BufferSize;	// バッファの数
 	DATATYPE *pWrite;	// 次書く場所
 	DATATYPE *pRead;	// 次読む場所
 	
@@ -45,18 +50,20 @@ public:
 	int8_t read(DATATYPE *data);		// 値取り出し
 	DATATYPE read(void){DATATYPE tmp; read(&tmp); return tmp;};		// 値取り出し
 	int8_t watch(DATATYPE *data);	// 値見るだけ
+	DATATYPE watch(void){DATATYPE tmp; watch(&tmp); return tmp;};		// 値見るだけ
 	int8_t watch(uint16_t IndexRel, DATATYPE *data);	//値見るだけ(IndexRel個先のを見る)
+	DATATYPE watch(uint16_t IndexRel){DATATYPE data=0; watch(IndexRel, &data); return data;};	//値見るだけ(IndexRel個先のを見る)
 	
-	uint16_t getNumElements(void);
-	uint16_t getBufferSize(void){return BufferSize;};
-	uint16_t getFreeSpace(void){return getBufferSize()-getNumElements();};
-	uint16_t getWriteIndex(void){return (uint16_t)(pWrite-Buffer);};		//バッファ先頭から何番目を指しているか
-	uint16_t getReadIndex(void){return (uint16_t)(pRead-Buffer);};
+	uint16_t getBufferSize(void){return BufferSize;};	// バッファ数を返す
+	uint16_t getNumElements(void);				// バッファに溜まってる数を返す
+	uint16_t getFreeSpace(void){return getBufferSize()-getNumElements();};	// バッファ空き数を返す
+	uint16_t getWriteIndex(void){return (uint16_t)(pWrite-Buffer);};	// バッファ先頭から何番目を指しているか
+	uint16_t getReadIndex(void){return (uint16_t)(pRead-Buffer);};		// 
 	
-	bool_t isFull(void){return (getNumElements()>=BufferSize);};
-	bool_t isEmpty(void){return (pWrite==pRead);};
-	void clear(void);
+	bool_t isFull(void){return (getNumElements()>=BufferSize);};	// バッファいっぱい？
+	bool_t isEmpty(void){return (pWrite==pRead);};			// バッファ空？
 	
+	void clear(void);						// バッファ消す
 };
 
 
@@ -67,6 +74,7 @@ public:
 **********************/
 template <class DATATYPE> RingBuffer<DATATYPE>::RingBuffer(uint16_t BufferSize){
 	Buffer = new DATATYPE[BufferSize+1];
+		if(NULL==Buffer) __heap_chk_fail();
 	if(NULL!=Buffer){
 		this->BufferSize = BufferSize;
 	}else{
@@ -104,7 +112,7 @@ int8_t RingBuffer<DATATYPE>::add(DATATYPE data){
 	if(pNext != pRead){	// not reach to pRead
 		*pWrite = data;		// Write data
 		pWrite = pNext;		// Update pointer
-		return 0;
+		return BUFFER_ADD_OK;
 	}
 	
 	return -1;
@@ -124,7 +132,7 @@ int8_t RingBuffer<DATATYPE>::read(DATATYPE *data){
 		if(pRead > &Buffer[BufferSize]){
 			pRead = Buffer;
 		}
-		return 0;
+		return BUFFER_READ_OK;
 	}
 	
 	return -1;	// no data
@@ -138,7 +146,7 @@ int8_t RingBuffer<DATATYPE>::watch(DATATYPE *data){
 	
 	if(pRead != pWrite){
 		*data = *pRead;		// Read data
-		return 0;
+		return BUFFER_READ_OK;
 	}
 	
 	return -1;	// no data
@@ -152,14 +160,15 @@ template <class DATATYPE>
 int8_t RingBuffer<DATATYPE>::watch(uint16_t IndexRel, DATATYPE *data){
 	DATATYPE* pReadRet = pRead;
 	
-	if(IndexRel<=getNumElements()){
+	*data = 0;
+	if(IndexRel <= getNumElements()){
 		pReadRet += IndexRel;		// ポインタの計算なので勝手にデータ型分のサイズ移動してくれる
 		while(pReadRet>&Buffer[BufferSize]){
 			pReadRet = pReadRet-BufferSize-1;	
 		}
 		
-		*data = *pReadRet
-		return 0;
+		*data = *pReadRet;
+		return BUFFER_READ_OK;
 		
 	}
 	
@@ -182,7 +191,7 @@ void RingBuffer<DATATYPE>::clear(void){
 template <class DATATYPE>
 uint16_t RingBuffer <DATATYPE> ::getNumElements(void){
 	
-	if(pWrite>=pRead){
+	if(pWrite >= pRead){
 		return (pWrite-pRead);
 	}else{
 		return (uint16_t)(&Buffer[BufferSize] - pRead + pWrite - Buffer)+1;		// 要素数で数える

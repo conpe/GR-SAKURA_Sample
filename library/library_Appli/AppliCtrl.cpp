@@ -25,6 +25,8 @@ ctrl_pid::ctrl_pid(float dt, float Kp, float Ki, float Kd, float OutMin, float O
 	ctrl_pid::OutMax = OutMax;
 	ctrl_pid::SumMin = SumMin;
 	ctrl_pid::SumMax = SumMax;
+	
+	resetStatus();
 }
 
 /*********************
@@ -46,8 +48,8 @@ float ctrl_pid::calc(float Err){
 	}
 	
 	OutP = Kp * Err;
-	OutD = Kd * (Err - StErr_1)/dt;
 	OutI = Ki * StSum * dt;
+	OutD = Kd * (Err - StErr_1)/dt;
 	
 	StErr_1 = Err;
 	
@@ -62,9 +64,9 @@ float ctrl_pid::calc(float Err){
 }
 
 /*********************
-PSD計算
+PIDリセット
 概要：
- PIDの計算をするよ
+ PIDの内部パラメータをリセット
 引数：
 
 **********************/
@@ -80,6 +82,61 @@ void ctrl_pid::resetStatus(float Err){
 
 
 
+
+/*********************
+移動平均
+概要：
+引数：
+**********************/
+ctrl_move_average::ctrl_move_average(uint16_t AveNum){
+	
+	this->AveNum = AveNum;
+	
+	Nums = new float[AveNum];
+		if(NULL==Nums) __heap_chk_fail();
+	if(NULL==Nums){
+		this->AveNum = 0;
+	}
+	init = true;
+	pWrite = 0;
+}
+
+ctrl_move_average::~ctrl_move_average(void){
+	delete[] Nums;
+}
+
+// 初期値セット
+void ctrl_move_average::setInitial(float Dat){
+	for(int i=0; i<AveNum; i++){
+		Nums[i] = Dat;
+	}
+	init = false;
+}
+
+// 平均処理
+float ctrl_move_average::average(float Dat){
+	if(init){
+		setInitial(Dat);
+	}
+	
+	// 新しい値をセット
+	if(pWrite < (AveNum-1)){
+		pWrite++;
+	}else{
+		pWrite = 0;
+	}
+	Nums[pWrite] = Dat;
+	
+	// 全部を足す
+	float Sum = 0;
+	for(uint16_t i=0; i<AveNum; i++){
+		
+		Sum += Nums[i];
+	}
+	
+	// 足した数で割る
+	return Sum/AveNum;
+}
 
 
 /*********************
@@ -226,7 +283,7 @@ float ctrl_ratelimiter_abs::limitRate(float Sig){
 				Sig = -Sig;
 			}
 		}else{
-			//Sig = Sig;
+			//this->Sig = Sig;
 		}
 	}else{
 		if((Sig-SigLast)>UpRate){
@@ -234,11 +291,11 @@ float ctrl_ratelimiter_abs::limitRate(float Sig){
 		}else if((Sig-SigLast)<(-DownRate)){
 			Sig = SigLast-DownRate;
 		}else{
-			//Sig = Sig;
+			//this->Sig = Sig;
 		}
 	}
 	
 	
-	SigLast = Sig;
+	this->SigLast = Sig;
 	return Sig;	
 }

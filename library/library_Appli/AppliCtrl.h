@@ -13,14 +13,21 @@
 #ifndef __APPLI_CTRL_H__
 #define __APPLI_CTRL_H__
 
+#include "CommonDataType.h"
+#include <new>
 
-
+/*********************
+PID制御
+概要：
+引数：
+**********************/
 class ctrl_pid
 {
 public:
-	ctrl_pid(float dt, float Kp, float Kd, float Ki, float OutMin, float OutMax, float SumMin, float SumMax);
+	ctrl_pid(float dt, float Kp, float Ki, float Kd, float OutMin, float OutMax, float SumMin, float SumMax);
 	float calc(float Err);
 	
+	void setParam(float Kp, float Ki, float Kd){this->Kp = Kp;this->Ki = Ki;this->Kd = Kd;};
 	void resetStatus(void);
 	void resetStatus(float Err);
 
@@ -34,6 +41,25 @@ private:
 	float OutMin, OutMax;	// 出力最小, 最大値
 	float SumMin, SumMax;	// 積分最大値
 	
+};
+
+/*********************
+移動平均
+概要：
+引数：
+**********************/
+class ctrl_move_average{
+public:
+	ctrl_move_average(uint16_t AveNum);
+	virtual ~ctrl_move_average(void);
+	
+	void setInitial(float Dat);	// 初期値セット
+	float average(float Dat);
+private:
+	bool_t init;
+	float* Nums;	// 値覚えておく
+	uint16_t AveNum;	// 平均する数
+	uint16_t pWrite;	// 書く場所
 };
 
 

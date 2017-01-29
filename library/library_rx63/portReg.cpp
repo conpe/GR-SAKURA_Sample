@@ -1,6 +1,10 @@
 
 #include "portReg.h"
 
+// XV‚µ‚½‚¢
+// ‘¶Ý‚µ‚È‚¢ƒsƒ“”Ô†‚¾‚Á‚½‚ç‰½‚à‚µ‚È‚¢
+
+
 void setPinMode(pins Pin, pin_mode PinMode){
 	
 	uint8_t port = (Pin>>4)&0xFF;	
@@ -10,6 +14,7 @@ void setPinMode(pins Pin, pin_mode PinMode){
 	volatile uint8_t *adr_pcr = GET_ADR_PCR(port);
 	
 	// Strip the pin of its peripheral functions, if any.
+	bool_t PmrTmp = bitRead(*GET_ADR_PMR(port), bit);
 	bitClear(*GET_ADR_PMR(port), bit);
 	
 	// Affect the mode.
@@ -61,14 +66,19 @@ void setPinMode(pins Pin, pin_mode PinMode){
 	} // switch : mode.
 
 	//g_pinsCurrentAttachFunction[pin] = _ATTACH_OTHER;
-
+	
+	if(PmrTmp){
+		bitSet(*GET_ADR_PMR(port), bit);
+	}else{
+		bitClear(*GET_ADR_PMR(port), bit);
+	}
 }
 
 bool_t readPin(pins Pin){
 	
-    uint8_t port = (Pin>>4)&0xFF;
+	uint8_t port = (Pin>>4)&0xFF;
 	uint8_t bit = (Pin&0x0F);
-	
+
 	if (bitRead(*GET_ADR_PIDR(port), bit)){
 		return 1;
 	}else{

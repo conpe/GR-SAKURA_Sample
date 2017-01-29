@@ -73,7 +73,7 @@ public:
 	// コンストラクタ
 	sharp_GP2Y0E(I2c_t* I2Cn, uint8_t I2cAddress);
 	// デストラクタ
-	~sharp_GP2Y0E(void);
+	virtual ~sharp_GP2Y0E(void);
 	
 	//動作開始
 	int8_t begin(void);
@@ -114,6 +114,7 @@ class shgp2_comus_t:public I2c_comu_t {
 public:
 	shgp2_comus_t(uint8_t DestAddress, uint8_t* TxData, uint16_t TxNum, uint16_t RxNum)	: I2c_comu_t(DestAddress, TxData, TxNum, RxNum){};	// 送受信
 	
+	static uint8_t DevId;	// デバイスID
 	sharp_GP2Y0E* SHGP2;
 	shgp2_comu_content ComuType;
 

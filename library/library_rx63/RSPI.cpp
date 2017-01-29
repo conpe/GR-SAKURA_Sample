@@ -62,23 +62,18 @@ Spi_t::~Spi_t(void){
 }
 
 // 
-int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0, spi_pin PinSSLn1, spi_pin PinSSLn2, spi_pin PinSSLn3){
-	
-	begin(PinMOSI, PinMISO, PinRSPCK, PinSSLn0, PinSSLn1, PinSSLn2, PinSSLn3, SPI_BUFFER_SIZE_DEFAULT);
-	
-	return 0;
-}
-
 int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn0, spi_pin PinSSLn1, spi_pin PinSSLn2, spi_pin PinSSLn3, uint16_t BuffNum){
 	
 	// Buffer
-	if(NULL!=TxBuff)	delete TxBuff;
+	if(NULL!=TxBuff)	delete TxBuff;	TxBuff = NULL;
 	TxBuff = new RingBuffer<uint8_t>(BuffNum);
+		if(NULL==TxBuff) __heap_chk_fail();
 	if(NULL==TxBuff) return -1;
 	fUseRx = ((PinMISO!=MISOA_NONE) && (PinMISO!=MISOB_NONE));
 	if(fUseRx){
-		if(NULL!=RxBuff)	delete RxBuff;
+		if(NULL!=RxBuff)	delete RxBuff;	RxBuff = NULL;
 		RxBuff = new RingBuffer<uint8_t>(BuffNum);
+		if(NULL==RxBuff) __heap_chk_fail();
 		if(NULL==RxBuff) return -1;
 	}
 	fBufferAttached = 1;
@@ -98,12 +93,6 @@ int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin 
 }
 
 // 
-int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn){
-	
-	begin(PinMOSI, PinMISO, PinRSPCK, PinSSLn, SPI_BUFFER_SIZE_DEFAULT);
-	return 0;
-}
-
 int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin PinSSLn, uint16_t BuffNum){
 	spi_pin PinSSLn0, PinSSLn1, PinSSLn2, PinSSLn3;
 	
@@ -146,12 +135,14 @@ int8_t Spi_t::begin(spi_pin PinMOSI, spi_pin PinMISO, spi_pin PinRSPCK, spi_pin 
 	
 	
 	// Buffer	
-	if(NULL!=TxBuff)	delete TxBuff;
+	if(NULL!=TxBuff)	delete TxBuff;	TxBuff = NULL;
 	TxBuff = new RingBuffer<uint8_t>(BuffNum);
+		if(NULL==TxBuff) __heap_chk_fail();
 	if(NULL==TxBuff) return -1;
 	if(fUseRx){
-		if(NULL!=RxBuff)	delete RxBuff;
+		if(NULL!=RxBuff)	delete RxBuff;	RxBuff = NULL;
 		RxBuff = new RingBuffer<uint8_t>(BuffNum);
+		if(NULL==RxBuff) __heap_chk_fail();
 		if(NULL==RxBuff) return -1;
 	}
 	fBufferAttached = 1;
@@ -602,7 +593,6 @@ void Spi_t::setCallBackFuncTx(void (*CallBackFuncTx)(void)){
 
 void Spi_t::setCallBackFuncRx(void (*CallBackFuncRx)(void)){
 	Spi_t::CallBackFuncRx = CallBackFuncRx;
-	
 }
 
 void Spi_t::isrTx(void){
@@ -623,11 +613,12 @@ void Spi_t::isrTx(void){
 
 void Spi_t::isrRx(void){
 
+	RxBuff->add(getSpiRxData());
+	
 	// 受信終了割り込み
 	if(CallBackFuncRx!=NULL){
 		(*CallBackFuncRx)();
 	}
-	RxBuff->add(getSpiRxData());
 	
 }
 
@@ -652,9 +643,7 @@ void Excep_RSPI0_SPTI0(void){
 void Excep_RSPI1_SPTI1(void)
 {
 	setpsw_i();	//多重割り込み許可
-	//PORTD.PODR.BIT.B0 = 1;
 	SPI1.isrTx();
-	//PORTD.PODR.BIT.B0 = 0;
 }
 
 //rx
@@ -669,9 +658,7 @@ void Excep_RSPI0_SPRI0(void){
 #pragma interrupt (Excep_RSPI1_SPRI1(enable, vect=VECT(RSPI1,SPRI1)))
 void Excep_RSPI1_SPRI1(void){
 	setpsw_i();	//多重割り込み許可
-	//PORTD.PODR.BIT.B1 = 1;
 	SPI1.isrRx();
-	//PORTD.PODR.BIT.B1 = 0;
 }
 
 #pragma section 

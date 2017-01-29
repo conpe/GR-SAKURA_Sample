@@ -1,6 +1,8 @@
 
 #include "GR_Ex15_OLED.h"
 
+gr_ex_oled GrExOled;
+OledDriverSSD1306 Oled;
 
 
 void gr_ex_oled::begin(void){
@@ -16,15 +18,13 @@ void gr_ex_oled::begin(void){
 	
 }
 
-// OLED CD??
-void OLED_TxCallback(void){
+// OLED CD
+void gr_ex_oled::OLED_TxCallback(void){
 	Oled.callbackTxIsr();
 }
 
 
 
-gr_ex_oled GrExOled;
-OledDriverSSD1306 Oled;
 
 
 

@@ -10,6 +10,7 @@
 #include "SharpGP2Y0E.h"
 
 
+uint8_t shgp2_comus_t::DevId = 0x02;
 
 /*********************
 測距センサ初期化
@@ -335,6 +336,7 @@ int8_t sharp_GP2Y0E::setI2cAddress(uint8_t NewAddress, pins Vpp){
 	// Stage9.3 read
 	TxData[0] = 0x27;
 	FuseRcv = new uint8_t[1];
+		if(NULL==FuseRcv) __heap_chk_fail();
 	AttachedIndex = attachI2cComu(SET_FUSE_I2CADDRESS, TxData, 1, 1);
 	if(AttachedIndex<0){	// エラーだ…
 		return AttachedIndex;
@@ -387,6 +389,7 @@ int8_t sharp_GP2Y0E::attachI2cComu(shgp2_comu_content ComuType, uint8_t* TxData,
 	shgp2_comus_t* NewComu;
 	
 	NewComu = new shgp2_comus_t(I2cAddress, TxData, TxNum, RxNum);
+		if(NULL==NewComu) __heap_chk_fail();
 	if(NULL == NewComu){
 		return -1;	// ヒープ足りない？
 	}
@@ -429,48 +432,53 @@ I2C読み終わったので捕獲
 int8_t sharp_GP2Y0E::fetchI2cRcvData(const shgp2_comus_t* Comu){
 	uint8_t* RcvData = Comu->RxData;
 	
-	// 通信ちゃんと出来てる？
-	fI2cErr = Comu->Err;
-	
-	// 通信完了フラグ立てる
-	if(LastAttachComu == Comu){
-		fLastAttachComuFin = true;
-	}
-	
-	if(!fI2cErr){
+	if(NULL!=Comu){
 		
-		// 通信内容によって受信データを処理する
-		switch(Comu->ComuType){
-		case GET_DISTANCE:	// 距離取得
-			Distance_mm = (int16_t)((((uint16_t)RcvData[0])<<4)|(((uint16_t)RcvData[1])&0x000F))*10/16/4;
-			
-			if(Distance_mm == SHGP2_FAIL_DISTANCE_MM){
-				Distance_mm = SHGP2_DISTANCE_DEFAULT;
-			}
+		// 通信ちゃんと出来てる？
+		fI2cErr = Comu->Err;
 		
-			fMeasurement = false;
-				
-			//更に計測する
-			if(MeasurementRequest){
-				measure();
-			}
-			
-			break;
-		case SET_MEDIANFILTER:
-			// none
-			break;
-			
-		case SET_FUSE_I2CADDRESS:
-			if(Comu->RxNum>0){
-				FuseRcv[0] = RcvData[0];
-			}
-			break;
+		// 通信完了フラグ立てる
+		if(LastAttachComu == Comu){
+			fLastAttachComuFin = true;
 		}
+		
+		if(!fI2cErr){
+			
+			// 通信内容によって受信データを処理する
+			switch(Comu->ComuType){
+			case GET_DISTANCE:	// 距離取得
+				Distance_mm = (int16_t)((((uint16_t)RcvData[0])<<4)|(((uint16_t)RcvData[1])&0x000F))*10/16/4;
+				
+				if(Distance_mm == SHGP2_FAIL_DISTANCE_MM){
+					Distance_mm = SHGP2_DISTANCE_DEFAULT;
+				}
+			
+				fMeasurement = false;
+					
+				//更に計測する
+				if(MeasurementRequest){
+					measure();
+				}
+				
+				break;
+			case SET_MEDIANFILTER:
+				// none
+				break;
+				
+			case SET_FUSE_I2CADDRESS:
+				if(Comu->RxNum>0){
+					FuseRcv[0] = RcvData[0];
+				}
+				break;
+			}
+		}else{
+			Distance_mm = SHGP2_DISTANCE_DEFAULT;
+			fMeasurement = false;
+		}
+		
+		return 0;
 	}else{
-		Distance_mm = SHGP2_DISTANCE_DEFAULT;
-		fMeasurement = false;
+		return -1;
 	}
-	
-	return 0;
 }
 

@@ -15,9 +15,10 @@
 
 
 //更新履歴
-// 2015/02/25 SH7125用から移植。C++化。　
-// 2015/07/19 受信待ちをなくすため、割り込みで実行するようにした。
-
+// 2015.02.25 SH7125用から移植。C++化。　
+// 2015.07.19 受信待ちをなくすため、割り込みで実行するようにした。
+// 2015.05.25 通信失敗時にメモリリークしてたのを修正
+// 2015.05.29 最大回転角度設定
 
 //更新したい
 // 通信の管理をSCIモジュールごとに行う。できてないから困っちゃう。受信割り込みとかが無駄に増えてるよん(´・ω・｀)。通信内容のあれでsci覚えておくのもやだし
@@ -34,10 +35,11 @@
 // debug用
 //#include "SCI.h"
 
-//#define FTCMDSV_COMUSNUM_DEFAULT 32		// 覚えておける通信内容
-#define FTCMDSV_COMUSNUM_DEFAULT 12		// 覚えておける通信内容
-
-#define CMDSV_BAUDRATE_DEFAULT 115200
+#define FTCMDSV_COMUSNUM_DEFAULT 32		// 覚えておける通信内容
+#define CMDSV_BAUDRATE_DEFAULT 115200		// 通信速度
+#define FTCMDSV_FAILCNT_MAX 64	// 通信失敗したカウント(これを超えると通信系リセット)
+#define FTCMDSV_LIMIT_CW  3600	// 最大回転角度
+#define FTCMDSV_LIMIT_CCW -3600	// 
 
 //↓ これいらない
 #define CMDSV_ADRS_ServoID 0x04
@@ -148,6 +150,7 @@ class futaba_cmd_servo_comu_t;
 class futaba_cmd_servo{
 	
 public:
+	int16_t GoalPosition;
 		
 	/*********************
 	コンストラクタ
@@ -155,11 +158,22 @@ public:
 			SCI操作インスタンス
 			ボーレート 4800～115200(default)
 	**********************/
-	futaba_cmd_servo(uint8_t ID, Sci_t* Sci, uint32_t BaudRate);
-	futaba_cmd_servo(uint8_t ID, Sci_t* Sci);
+	futaba_cmd_servo(uint8_t ID, Sci_t* Sci, uint32_t BaudRate = CMDSV_BAUDRATE_DEFAULT);
 	~futaba_cmd_servo(void);
-
+	
+	/*********************
+	初期化
+	引数：
+	**********************/
 	int8_t begin(void);
+	
+	/*********************
+	回転角度制限値
+	引数：
+		cw : CW側 0.1[deg]
+		ccw : CCW側 0.1[deg]
+	**********************/
+	void setLimit(int16_t cw, int16_t ccw);
 
 	/*********************
 	サーボID設定
@@ -254,7 +268,7 @@ public:
 	現在速度
 	引数：
 	返値：
-		signed int ： deg/sec
+		int16_t ： deg/sec
 	**********************/
 	int8_t updatePresentSpeed(void){return reqReadMemory(CMDSV_PRESENTSPEED);};
 	int16_t getPresentSpeed(void){return ResisterData.PresentSpeed;};
@@ -263,7 +277,7 @@ public:
 	負荷電流
 	引数：
 	返値：
-		uint16_t ： 電流 [mV]
+		uint16_t ： 電流 [mA]
 	**********************/
 	int8_t updatePresentCurrent(void){return reqReadMemory(CMDSV_PRESENTCURRENT);};
 	uint16_t getPresentCurrent(void){return ResisterData.PresentCurrent;};
@@ -289,13 +303,18 @@ public:
 	
 	
 	
-	//debuf
+	//debug
 	static bool_t fAttaching;
 private:
 	Sci_t *ServoSci;
 	uint32_t BaudRate;
 	uint8_t ID;
 	ftcmdsv_data ResisterData;
+	uint8_t FailCnt;		// 通信失敗カウント。規定値に達すると、バッファリセット
+	
+	int16_t LimitCW;	// 最大回転角度 CW  0.1[deg]
+	int16_t LimitCCW;	// 最大回転角度 CCW 0.1[deg]
+	
 	static const uint8_t ResisterAdrsLength[24][2];	// 各レジスタのアドレスとデータ長
 	
 	//static bool_t fAttaching;
@@ -374,7 +393,8 @@ private:
 	// 現在通信中の通信
 	static futaba_cmd_servo_comu_t* CurrentComu;
 	// 通信内容記憶バッファ
-	static RingBuffer<futaba_cmd_servo_comu_t*> *ComusBuff;
+	//static RingBuffer<futaba_cmd_servo_comu_t*> *ComusBuff;
+	static RingBuffer<futaba_cmd_servo_comu_t*> ComusBuff;
 	
 	/*********************
 	送信マネジメント関数
@@ -482,6 +502,7 @@ public:
 				TxNum = 0x10;
 			}
 			this->TxData = new uint8_t[TxNum];
+		if(NULL==TxData) __heap_chk_fail();
 			if(NULL!=this->TxData){
 				memcpy(this->TxData, TxData, this->TxNum);
 			}
@@ -494,6 +515,7 @@ public:
 				RxNum = 0x10;
 			}
 			this->RxData = new uint8_t[RxNum];
+		if(NULL==RxData) __heap_chk_fail();
 		}else{
 			this->RxData = NULL;
 		}

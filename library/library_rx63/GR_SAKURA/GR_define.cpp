@@ -18,4 +18,21 @@ uint32_t getPCLK(void){
 }
 
 
+// ŽžŠÔŠÖŒW
+static uint32_t GR_Time_msec = 0;
+
+void GR_cnt(void){
+	GR_Time_msec++;
+}
+/*
+uint32_t getTime_ms(uint32_t BaseTime_ms){
+	return GR_Time_msec - BaseTime_ms;
+}*/
+uint32_t getTime_ms(void){
+	return GR_Time_msec;
+}
+
+void resetTime(void){
+	GR_Time_msec = 0;
+}
 

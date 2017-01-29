@@ -9,7 +9,7 @@
 【使い方】
 
 OLEDへのデータ、コマンド送信切り替えを行うために、SPI送信時にコールバックする必要あり。
-OledDriverSSD1306::callbackTxIsr()を呼び出すグローバルな関数へのポインタを、begin()に与えてください。
+対象のOLEDインスタンスのOledDriverSSD1306::callbackTxIsr()を呼び出すグローバルな関数へのポインタを、begin()に与えてください。
 
 
 【更新履歴】
@@ -17,7 +17,10 @@ OledDriverSSD1306::callbackTxIsr()を呼び出すグローバルな関数へのポインタを、begi
 			それをSPI送信の割り込み時に呼び出されるようにセット。
 2015.03.07	コールバック関数内でCD出力するように
 2015.11.28	printメソッド、動的に確保してたら他のとこ侵食してたので静的に確保するように変更。
-			
+
+【変更予定】
+コールバック関数の仕様再考
+
 */
 
 #ifndef OLED_DRIVER_SSD_HPP_
@@ -39,7 +42,7 @@ OledDriverSSD1306::callbackTxIsr()を呼び出すグローバルな関数へのポインタを、begi
 #define OLED_LINE 8
 
 #define OLED_BUFFER_SIZE_DEFAULT 512		// SPIバッファの数
-#define OLED_DC_BUFFER_SIZE_DEFAULT 512		// DCバッファの数(SPIと同じにする)
+#define OLED_DC_BUFFER_SIZE_DEFAULT OLED_BUFFER_SIZE_DEFAULT	// DCバッファの数(SPIと同じにする)
 
 #define OLED_FONT_NUM 192		// フォントの数
 
